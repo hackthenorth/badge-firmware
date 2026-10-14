@@ -1,0 +1,12 @@
+# These fonts are used directly by built-in apps. Select them for existing
+# sdkconfig files too; sdkconfig.defaults only supplies missing settings.
+config BADGE_REQUIRED_UI_FONTS
+    bool
+    default y
+    select LV_FONT_MONTSERRAT_12
+    select LV_FONT_MONTSERRAT_14
+    select LV_FONT_MONTSERRAT_16
+    select LV_FONT_MONTSERRAT_18
+    select LV_FONT_MONTSERRAT_20
+    select LV_FONT_MONTSERRAT_22
+    select LV_FONT_MONTSERRAT_24

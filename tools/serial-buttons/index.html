@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Badge Buttons</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#0b1422; color:#e0e8f0; font-family:system-ui,sans-serif;
+         display:flex; flex-direction:column; align-items:center; gap:24px;
+         padding:32px; margin:0; min-height:100vh; }
+  h1 { margin:0; font-weight:500; letter-spacing:.5px; }
+  .row { display:flex; gap:64px; align-items:center; }
+  .dpad { display:grid; grid-template-columns:repeat(3,72px);
+          grid-template-rows:repeat(3,72px); gap:6px; }
+  .dpad .up    { grid-column:2; grid-row:1; }
+  .dpad .left  { grid-column:1; grid-row:2; }
+  .dpad .right { grid-column:3; grid-row:2; }
+  .dpad .down  { grid-column:2; grid-row:3; }
+  .face { display:grid; grid-template-columns:72px 72px;
+          grid-template-rows:72px 72px; gap:12px; }
+  button { font:600 14px/1 system-ui,sans-serif; color:#e0e8f0;
+           background:#1a2332; border:2px solid #2d4a6b; border-radius:10px;
+           cursor:pointer; transition:transform .05s, background .1s, border-color .1s;
+           user-select:none; }
+  button:hover { background:#243349; }
+  button:active, button.flash {
+    background:#00d9ff; color:#001018; border-color:#fff; transform:scale(.95);
+  }
+  .status { font:13px/1.4 ui-monospace,monospace; opacity:.7; min-height:18px; }
+  .hint { font-size:12px; opacity:.5; }
+  .config { display:flex; gap:8px; align-items:center; font-size:13px; opacity:.8; }
+  .config label { opacity:.7; }
+  .config input { background:#0e1a2c; color:#e0e8f0; border:1px solid #2d4a6b;
+                  border-radius:6px; padding:6px 10px; width:280px;
+                  font:13px ui-monospace,monospace; }
+  .config input:focus { outline:none; border-color:#00d9ff; }
+  .stream { background:#000; border:1px solid #2d4a6b; border-radius:8px;
+            width:640px; max-width:90vw; aspect-ratio:4/3; object-fit:contain;
+            display:block; transform: rotate(270deg); margin-bottom: 200px; }
+</style>
+</head>
+<body>
+  <h1>Badge Buttons</h1>
+  <div class="config">
+    <label for="backend">backend</label>
+    <input id="backend" type="url" spellcheck="false" placeholder="http://localhost:3000">
+  </div>
+  <video id="stream" class="stream" autoplay muted playsinline></video>
+  <div class="row">
+    <div class="dpad">
+      <button data-btn="Up" class="up">UP</button>
+      <button data-btn="Left" class="left">LEFT</button>
+      <button data-btn="Right" class="right">RIGHT</button>
+      <button data-btn="Down" class="down">DOWN</button>
+    </div>
+    <div class="face">
+      <button data-btn="Home">HOME</button>
+      <button data-btn="Aux1">AUX1</button>
+      <button data-btn="Start">START</button>
+      <button data-btn="B">B</button>
+      <button data-btn="A">A</button>
+    </div>
+  </div>
+  <div class="status" id="status">&nbsp;</div>
+  <div class="hint">arrows = d-pad &middot; A/B keys &middot; Enter = Start &middot; Space = Home</div>
+<script>
+  const status = document.getElementById('status');
+  const backendInput = document.getElementById('backend');
+  const STORAGE_KEY = 'badge-buttons-backend';
+  const DEFAULT_BACKEND = `${location.protocol === 'file:' ? 'http:' : location.protocol}//${location.hostname || 'localhost'}`;
+  backendInput.value = localStorage.getItem(STORAGE_KEY) || DEFAULT_BACKEND;
+
+  const videoEl = document.getElementById('stream');
+  const MIME = 'video/mp4; codecs="avc1.42E028"'; // H.264 Baseline 4.0
+  let streamAbort = null;
+  let mediaSource = null;
+  let sourceBuffer = null;
+  const pending = [];
+
+  function appendNext() {
+    if (!sourceBuffer || sourceBuffer.updating || pending.length === 0) return;
+    try { sourceBuffer.appendBuffer(pending.shift()); }
+    catch (e) {
+      if (e.name === 'QuotaExceededError') {
+        // Drop everything older than ~0.5s before the playhead.
+        const cur = videoEl.currentTime;
+        if (cur > 0.5) {
+          try { sourceBuffer.remove(0, cur - 0.5); } catch {}
+        } else {
+          pending.length = 0;
+        }
+      } else {
+        console.warn('appendBuffer failed', e);
+      }
+    }
+  }
+
+  // Keep the playhead near the live edge; if we drift behind, jump forward.
+  setInterval(() => {
+    if (!videoEl.buffered.length) return;
+    const end = videoEl.buffered.end(videoEl.buffered.length - 1);
+    if (end - videoEl.currentTime > 0.4) videoEl.currentTime = end - 0.05;
+  }, 500);
+
+  async function startStream() {
+    if (streamAbort) streamAbort.abort();
+    streamAbort = new AbortController();
+    pending.length = 0;
+
+    if (!('MediaSource' in window) || !MediaSource.isTypeSupported(MIME)) {
+      status.textContent = `MSE/${MIME} not supported in this browser`;
+      return;
+    }
+
+    mediaSource = new MediaSource();
+    videoEl.src = URL.createObjectURL(mediaSource);
+    await new Promise((r) => mediaSource.addEventListener('sourceopen', r, { once: true }));
+    sourceBuffer = mediaSource.addSourceBuffer(MIME);
+    sourceBuffer.mode = 'segments';
+    sourceBuffer.addEventListener('updateend', appendNext);
+
+    const base = (backendInput.value.trim() || DEFAULT_BACKEND).replace(/\/+$/, '');
+    try {
+      const r = await fetch(`${base}/stream.mp4?t=${Date.now()}`, { signal: streamAbort.signal });
+      if (!r.ok || !r.body) throw new Error(`HTTP ${r.status}`);
+      const reader = r.body.getReader();
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        pending.push(value);
+        appendNext();
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') status.textContent = `stream error: ${e.message}`;
+    }
+  }
+  startStream();
+
+  backendInput.addEventListener('change', () => {
+    localStorage.setItem(STORAGE_KEY, backendInput.value.trim());
+    startStream();
+  });
+
+  async function press(name, el) {
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 120);
+    const base = (backendInput.value.trim() || DEFAULT_BACKEND).replace(/\/+$/, '');
+    try {
+      const r = await fetch(`${base}/press`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ button: name }),
+      });
+      status.textContent = r.ok ? `sent <${name}>` : `error ${r.status}: ${await r.text()}`;
+    } catch (e) {
+      status.textContent = `network error: ${e.message}`;
+    }
+  }
+  document.querySelectorAll('button[data-btn]').forEach((b) => {
+    b.addEventListener('click', () => press(b.dataset.btn, b));
+  });
+  const keymap = {
+    ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+    a: 'A', A: 'A', b: 'B', B: 'B', Enter: 'Start', ' ': 'Home',
+  };
+  document.addEventListener('keydown', (e) => {
+    const name = keymap[e.key];
+    if (!name) return;
+    e.preventDefault();
+    const el = document.querySelector(`button[data-btn="${name}"]`);
+    if (el) press(name, el);
+  });
+</script>
+</body>
+</html>

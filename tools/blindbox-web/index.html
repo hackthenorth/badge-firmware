@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Solana Scavenger Hunt Web Serial POC</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      background: #09070f;
+      color: #f5f1ff;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; padding: 32px 18px; }
+    main { width: min(720px, 100%); margin: 0 auto; }
+    h1 { margin: 0 0 8px; font-size: clamp(26px, 5vw, 38px); }
+    p { color: #b8afc9; line-height: 1.5; }
+    .card {
+      margin-top: 22px;
+      padding: 20px;
+      border: 1px solid #3a2d50;
+      border-radius: 14px;
+      background: #120e1b;
+    }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    label { display: grid; gap: 7px; color: #d7cdeb; font-size: 14px; }
+    label.endpoint { grid-column: 1 / -1; }
+    input {
+      width: 100%;
+      padding: 11px 12px;
+      border: 1px solid #4d3a69;
+      border-radius: 8px;
+      background: #0b0811;
+      color: inherit;
+      font: inherit;
+    }
+    input:focus { outline: 2px solid #9f63ff; outline-offset: 1px; }
+    .actions { display: flex; gap: 10px; margin-top: 16px; }
+    button {
+      padding: 11px 16px;
+      border: 1px solid #9161d2;
+      border-radius: 9px;
+      background: #6d35bd;
+      color: white;
+      font: 650 15px/1 system-ui, sans-serif;
+      cursor: pointer;
+    }
+    button.secondary { background: transparent; border-color: #4d3a69; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .status {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: 9px;
+      background: #21162f;
+      color: #d9c6f7;
+      min-height: 44px;
+    }
+    .status.ok { background: #10281e; color: #8df0b9; }
+    .status.bad { background: #32151e; color: #ff9ab2; }
+    .payload { margin-top: 16px; }
+    .payload strong { display: block; margin-bottom: 7px; }
+    pre {
+      margin: 0;
+      padding: 12px;
+      max-height: 220px;
+      overflow: auto;
+      border-radius: 8px;
+      background: #08060c;
+      color: #d9d1e5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    details { margin-top: 18px; color: #b8afc9; }
+    details pre { margin-top: 9px; }
+    code { color: #dcb9ff; }
+    @media (max-width: 560px) {
+      .grid { grid-template-columns: 1fr; }
+      label.endpoint { grid-column: auto; }
+      .actions { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Solana Scavenger Hunt Web Serial POC</h1>
+  <p>
+    Connect a badge, open <strong>Solana Scavenger Hunt</strong> in <code>WEB</code> mode,
+    then press A on the badge. This page adds the box slug, POSTs the request,
+    and sends the server's message and URL back to the badge.
+  </p>
+
+  <section class="card">
+    <div class="grid">
+      <label class="endpoint">
+        POST endpoint
+        <input id="endpoint" type="url" placeholder="https://example.com/api/open" autocomplete="url">
+      </label>
+      <label>
+        Box slug
+        <input id="box" value="blind-box-01" maxlength="64">
+      </label>
+    </div>
+    <div class="actions">
+      <button id="connect">Connect badge</button>
+      <button id="disconnect" class="secondary" disabled>Disconnect</button>
+    </div>
+    <div id="status" class="status">Not connected.</div>
+
+    <div class="payload">
+      <strong>Latest POST body</strong>
+      <pre id="request">Waiting for a bump…</pre>
+    </div>
+    <div class="payload">
+      <strong>Latest server response</strong>
+      <pre id="response">Waiting for a response…</pre>
+    </div>
+
+    <details>
+      <summary>Serial log</summary>
+      <pre id="log"></pre>
+    </details>
+  </section>
+</main>
+
+<script>
+(() => {
+  "use strict";
+
+  const BAUD_RATE = 115200;
+  const MAX_RESPONSE_BYTES = 512; // BLINDBOX_WEB_MAX_RESPONSE in firmware.
+  const CHUNK_BYTES = 128;        // USB-Serial-JTAG RX ring is only 256 bytes.
+  const CHUNK_PAUSE_MS = 20;
+  const STORAGE_ENDPOINT = "blindbox-web-endpoint";
+  const STORAGE_BOX = "blindbox-web-box";
+  const DEFAULT_ENDPOINT = new URL("/api/open", location.href).href;
+
+  const els = {
+    endpoint: document.getElementById("endpoint"),
+    box: document.getElementById("box"),
+    connect: document.getElementById("connect"),
+    disconnect: document.getElementById("disconnect"),
+    status: document.getElementById("status"),
+    request: document.getElementById("request"),
+    response: document.getElementById("response"),
+    log: document.getElementById("log"),
+  };
+
+  els.endpoint.value = localStorage.getItem(STORAGE_ENDPOINT) || DEFAULT_ENDPOINT;
+  els.box.value = localStorage.getItem(STORAGE_BOX) || "blind-box-01";
+
+  let port = null;
+  let reader = null;
+  let writer = null;
+  let readLoopPromise = null;
+  let lineBuffer = "";
+  let requestQueue = Promise.resolve();
+  const lineWaiters = new Set();
+  const encoder = new TextEncoder();
+
+  function setStatus(message, kind = "") {
+    els.status.textContent = message;
+    els.status.className = `status ${kind}`.trim();
+  }
+
+  function log(message) {
+    els.log.textContent += message.endsWith("\n") ? message : `${message}\n`;
+    els.log.scrollTop = els.log.scrollHeight;
+  }
+
+  function pause(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function stripAnsi(value) {
+    return value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+  }
+
+  function notifyLine(rawLine) {
+    const line = stripAnsi(rawLine);
+    if (line) log(`< ${line}`);
+
+    for (const waiter of [...lineWaiters]) {
+      if (waiter.predicate(line)) {
+        clearTimeout(waiter.timer);
+        lineWaiters.delete(waiter);
+        waiter.resolve(line);
+      }
+    }
+
+    const match = line.match(/BBX_WEB_REQUEST\s+(\d+)\s+(\{.*\})/);
+    if (!match) return;
+
+    const requestId = Number(match[1]);
+    requestQueue = requestQueue
+      .then(() => processBump(requestId, match[2]))
+      .catch((error) => {
+        console.error(error);
+        setStatus(error.message || String(error), "bad");
+      });
+  }
+
+  function waitForLine(predicate, timeoutMs, description) {
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        predicate,
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          lineWaiters.delete(waiter);
+          reject(new Error(`Timed out waiting for ${description}`));
+        }, timeoutMs),
+      };
+      lineWaiters.add(waiter);
+    });
+  }
+
+  function rejectLineWaiters(reason) {
+    for (const waiter of lineWaiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(reason);
+    }
+    lineWaiters.clear();
+  }
+
+  async function readLoop(activePort) {
+    const decoder = new TextDecoder();
+    try {
+      while (port === activePort && activePort.readable) {
+        const activeReader = activePort.readable.getReader();
+        reader = activeReader;
+        try {
+          for (;;) {
+            const { value, done } = await activeReader.read();
+            if (done) break;
+            lineBuffer += decoder.decode(value, { stream: true });
+            const lines = lineBuffer.split(/\r\n|\r|\n/);
+            lineBuffer = lines.pop() || "";
+            for (const line of lines) notifyLine(line);
+          }
+        } finally {
+          activeReader.releaseLock();
+          if (reader === activeReader) reader = null;
+        }
+        break;
+      }
+    } catch (error) {
+      if (port === activePort) {
+        setStatus(`Serial connection lost: ${error.message || error}`, "bad");
+      }
+    } finally {
+      if (port === activePort) {
+        port = null;
+        writer?.releaseLock();
+        writer = null;
+        rejectLineWaiters(new Error("Badge disconnected"));
+        updateButtons();
+      }
+    }
+  }
+
+  async function sendLine(line) {
+    if (!writer) throw new Error("Badge is not connected");
+    log(`> ${line}`);
+    // The ESP console translates one bare CR into one newline. CRLF would
+    // become two input bytes and corrupt the raw body that follows.
+    await writer.write(encoder.encode(`${line}\r`));
+  }
+
+  async function writeChunked(bytes) {
+    if (!writer) throw new Error("Badge is not connected");
+    for (let offset = 0; offset < bytes.length; offset += CHUNK_BYTES) {
+      await writer.write(bytes.slice(offset, offset + CHUNK_BYTES));
+      if (offset + CHUNK_BYTES < bytes.length) await pause(CHUNK_PAUSE_MS);
+    }
+  }
+
+  async function returnResponse(requestId, response) {
+    const json = JSON.stringify({ message: response.message, url: response.url });
+    const bytes = encoder.encode(json);
+    if (bytes.length > MAX_RESPONSE_BYTES) {
+      throw new Error(`Server response is ${bytes.length} bytes; maximum is ${MAX_RESPONSE_BYTES}`);
+    }
+
+    const ready = waitForLine(
+      (line) => line.includes(`BBX_WEB_READY ${requestId}`),
+      3000,
+      "the badge to accept the response body",
+    );
+    await sendLine(`blindbox_response ${requestId} ${bytes.length}`);
+    await ready;
+
+    const accepted = waitForLine(
+      (line) => line.includes(`BBX_WEB_ACCEPTED ${requestId}`) ||
+                line.includes(`BBX_WEB_REJECTED ${requestId}`),
+      3000,
+      "the badge to confirm the response",
+    );
+    await writeChunked(bytes);
+    const acknowledgement = await accepted;
+    if (acknowledgement.includes("REJECTED")) {
+      throw new Error("Badge rejected the response (the request may have timed out)");
+    }
+  }
+
+  function validateBadgePayload(value) {
+    if (!value || typeof value !== "object") throw new Error("Badge sent invalid JSON");
+    for (const key of ["user_id", "name", "email"]) {
+      if (typeof value[key] !== "string") throw new Error(`Badge payload is missing ${key}`);
+    }
+    return value;
+  }
+
+  function validateServerResponse(value) {
+    if (!value || typeof value !== "object") throw new Error("Server response was not a JSON object");
+    if (typeof value.message !== "string" || !value.message) {
+      throw new Error("Server response is missing a non-empty message");
+    }
+    if (typeof value.url !== "string" || !value.url) {
+      throw new Error("Server response is missing a non-empty URL");
+    }
+    try {
+      new URL(value.url);
+    } catch {
+      throw new Error("Server response URL is invalid");
+    }
+    if (encoder.encode(value.message).length >= 160) {
+      throw new Error("Server message is too long for the badge (maximum 159 bytes)");
+    }
+    if (encoder.encode(value.url).length >= 192) {
+      throw new Error("Server URL is too long for the badge (maximum 191 bytes)");
+    }
+    return value;
+  }
+
+  async function processBump(requestId, badgeJson) {
+    const endpoint = els.endpoint.value.trim();
+    const box = els.box.value.trim();
+    if (!endpoint) throw new Error("Enter the POST endpoint before bumping");
+    if (!box) throw new Error("Enter a box slug before bumping");
+
+    let endpointUrl;
+    try {
+      endpointUrl = new URL(endpoint);
+    } catch {
+      throw new Error("The POST endpoint is not a valid URL");
+    }
+
+    const badge = validateBadgePayload(JSON.parse(badgeJson));
+    const postBody = {
+      box,
+      user_id: badge.user_id,
+      name: badge.name,
+      email: badge.email,
+    };
+    els.request.textContent = JSON.stringify(postBody, null, 2);
+    els.response.textContent = "Waiting for the endpoint…";
+    setStatus(`Badge bumped ${box}; sending POST…`);
+
+    localStorage.setItem(STORAGE_ENDPOINT, endpointUrl.href);
+    localStorage.setItem(STORAGE_BOX, box);
+
+    let httpResponse;
+    try {
+      httpResponse = await fetch(endpointUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(postBody),
+        signal: AbortSignal.timeout(20000),
+      });
+    } catch (error) {
+      throw new Error(`POST failed: ${error.message || error}. Check endpoint CORS.`);
+    }
+
+    const responseText = await httpResponse.text();
+    let responseJson;
+    try {
+      responseJson = JSON.parse(responseText);
+    } catch {
+      throw new Error(`Endpoint returned HTTP ${httpResponse.status} with non-JSON content`);
+    }
+    els.response.textContent = JSON.stringify(responseJson, null, 2);
+
+    if (!httpResponse.ok) {
+      const detail = responseJson.message || responseJson.error || httpResponse.statusText;
+      throw new Error(`Endpoint returned HTTP ${httpResponse.status}: ${detail}`);
+    }
+
+    const response = validateServerResponse(responseJson);
+    setStatus("POST succeeded; returning the result to the badge…");
+    await returnResponse(requestId, response);
+    setStatus("Done — the badge is showing the message and QR code.", "ok");
+  }
+
+  function updateButtons() {
+    const connected = Boolean(port && writer);
+    els.connect.disabled = connected;
+    els.disconnect.disabled = !connected;
+  }
+
+  async function connect() {
+    if (!("serial" in navigator)) {
+      setStatus("Web Serial is unavailable. Use Chrome or Edge on desktop over HTTPS or localhost.", "bad");
+      return;
+    }
+
+    els.connect.disabled = true;
+    setStatus("Choose the badge's USB JTAG/serial debug port…");
+    try {
+      const selectedPort = await navigator.serial.requestPort();
+      await selectedPort.open({ baudRate: BAUD_RATE, bufferSize: 4096 });
+      port = selectedPort;
+      writer = selectedPort.writable.getWriter();
+      lineBuffer = "";
+      readLoopPromise = readLoop(selectedPort);
+
+      // Clear a partial console line left by another serial client, then ask
+      // the REPL for a fresh prompt. Solana Scavenger Hunt requests are asynchronous, so
+      // no prompt parsing is needed after this nudge.
+      await writer.write(new Uint8Array([0x03]));
+      await sendLine("");
+
+      setStatus("Connected. Open Solana Scavenger Hunt in WEB mode and press A.", "ok");
+    } catch (error) {
+      if (error?.name === "NotFoundError") setStatus("Connection cancelled.");
+      else setStatus(`Connection failed: ${error.message || error}`, "bad");
+      await disconnect(false);
+    } finally {
+      updateButtons();
+    }
+  }
+
+  async function disconnect(showStatus = true) {
+    const activePort = port;
+    port = null;
+    rejectLineWaiters(new Error("Badge disconnected"));
+
+    try { await reader?.cancel(); } catch (_) {}
+    try { await readLoopPromise; } catch (_) {}
+    reader = null;
+    readLoopPromise = null;
+
+    if (writer) {
+      try { writer.releaseLock(); } catch (_) {}
+      writer = null;
+    }
+    if (activePort) {
+      try { await activePort.close(); } catch (_) {}
+    }
+    updateButtons();
+    if (showStatus) setStatus("Disconnected.");
+  }
+
+  els.connect.addEventListener("click", connect);
+  els.disconnect.addEventListener("click", () => disconnect());
+  els.endpoint.addEventListener("change", () => {
+    localStorage.setItem(STORAGE_ENDPOINT, els.endpoint.value.trim());
+  });
+  els.box.addEventListener("change", () => {
+    localStorage.setItem(STORAGE_BOX, els.box.value.trim());
+  });
+
+  if ("serial" in navigator) {
+    navigator.serial.addEventListener("disconnect", (event) => {
+      if (event.target === port) void disconnect(false).then(() => {
+        setStatus("Badge disconnected.", "bad");
+      });
+    });
+  }
+
+  updateButtons();
+})();
+</script>
+</body>
+</html>

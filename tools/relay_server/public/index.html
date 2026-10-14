@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solana Scavenger Hunt — live</title>
+<style>
+  /* Badge palette, so the screen and the hardware look related. */
+  :root {
+    --bg: #0a0e1a;
+    --panel: #0f1422;
+    --border: #2d4a6b;
+    --accent: #00d9ff;
+    --text: #e0e8f0;
+    --dim: #6a7a9a;
+    --gold: #ffd166;
+    --magenta: #ff5c8a;
+    --green: #36e07a;
+    --violet: #8a63ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: var(--bg); color: var(--text);
+    font: 16px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 16px;
+    border-bottom: 2px solid var(--border); padding-bottom: 12px; margin-bottom: 20px;
+  }
+  h1 { margin: 0; font-size: 28px; color: var(--accent); letter-spacing: 1px; }
+  .count { color: var(--dim); }
+  .live { margin-left: auto; color: var(--dim); font-size: 14px; }
+  .live.on { color: var(--green); }
+
+  ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  li {
+    background: var(--panel); border: 2px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; display: grid; gap: 4px;
+    grid-template-columns: 1fr auto; align-items: center;
+  }
+  /* Newest row gets a brief highlight so you can see it land. */
+  li.fresh { border-color: var(--gold); }
+  .item { font-size: 24px; color: var(--gold); grid-row: 1; }
+  .meta { color: var(--dim); font-size: 14px; grid-row: 2; grid-column: 1 / -1; }
+  .who { color: var(--text); }
+  .rarity {
+    grid-row: 1; grid-column: 2;
+    font-size: 13px; text-transform: uppercase; letter-spacing: 1px;
+    padding: 3px 10px; border-radius: 999px; border: 1px solid currentColor;
+  }
+  .rarity.common   { color: var(--dim); }
+  .rarity.uncommon { color: var(--accent); }
+  .rarity.rare     { color: var(--violet); }
+  .empty { color: var(--dim); padding: 40px 0; text-align: center; }
+  .warn {
+    margin-top: 24px; color: var(--dim); font-size: 13px;
+    border-top: 1px solid var(--border); padding-top: 12px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Solana Scavenger Hunt</h1>
+  <span class="count" id="count">0 opened</span>
+  <span class="live" id="live">connecting…</span>
+</header>
+
+<ul id="feed"></ul>
+<p class="empty" id="empty">Waiting for someone to open a box…</p>
+
+<p class="warn">
+  Live view is an in-memory buffer on the serverless function — it resets on cold
+  starts and won't see events handled by another instance. Vercel logs are the
+  real record.
+</p>
+
+<script>
+  const feedEl = document.getElementById("feed");
+  const emptyEl = document.getElementById("empty");
+  const countEl = document.getElementById("count");
+  const liveEl = document.getElementById("live");
+
+  let lastId = 0;
+  let total = 0;
+
+  function addEvent(e) {
+    const li = document.createElement("li");
+    li.className = "fresh";
+
+    const item = document.createElement("div");
+    item.className = "item";
+    item.textContent = e.label ? e.label + " (#" + e.item + ")" : e.item;
+
+    const rarity = document.createElement("div");
+    rarity.className = "rarity " + e.rarity;
+    rarity.textContent = e.rarity;
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const when = new Date(e.at).toLocaleTimeString();
+    const who = e.name ? e.name : "(no name set)";
+    meta.append(when + " - " + e.box + " - ");
+    const whoEl = document.createElement("span");
+    whoEl.className = "who";
+    whoEl.textContent = who;
+    meta.append(whoEl, " - " + (e.badge || "?"));
+
+    li.append(item, rarity, meta);
+    feedEl.prepend(li);
+    setTimeout(() => li.classList.remove("fresh"), 2000);
+
+    // Keep the DOM bounded — this thing may run all day on a spare monitor.
+    while (feedEl.children.length > 50) feedEl.lastElementChild.remove();
+
+    total++;
+    emptyEl.style.display = "none";
+    countEl.textContent = total + (total === 1 ? " opened" : " opened");
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch("/api/feed?since=" + lastId, { cache: "no-store" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const data = await r.json();
+
+      // A shrinking id means the function cold-started and lost the buffer.
+      if (data.last < lastId) lastId = 0;
+
+      for (const e of data.events) addEvent(e);
+      lastId = data.last;
+
+      liveEl.textContent = "live";
+      liveEl.className = "live on";
+    } catch (err) {
+      liveEl.textContent = "offline";
+      liveEl.className = "live";
+    }
+  }
+
+  poll();
+  setInterval(poll, 1000);
+</script>
+</body>
+</html>

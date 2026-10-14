@@ -1,0 +1,104 @@
+menu "Solana Scavenger Hunt Relay"
+
+    config RELAY_WIFI_SSID
+        string "WiFi SSID"
+        default ""
+        help
+            Network the relay joins to reach the webhook. WPA2-PSK.
+
+    config RELAY_WIFI_PASSWORD
+        string "WiFi password"
+        default ""
+        help
+            Leave empty for an open network.
+
+    config RELAY_WIFI_STA_MAC
+        string "Custom WiFi STA MAC (xx:xx:xx:xx:xx:xx, empty = chip default)"
+        default ""
+        help
+            Override the WiFi station MAC, e.g. for a MAC-whitelisted IoT
+            network. Empty means keep the chip efuse MAC. Applied with
+            esp_wifi_set_mac() before wifi start.
+
+            The Down-button MAC editor (NVS-persisted) takes precedence over
+            this when set, using the event's fixed 24:0A:C4:C8:46 prefix
+            and a selected last byte from A0 through B3.
+
+    config RELAY_WEBHOOK_URL
+        string "Webhook URL"
+        default "https://relay-server-pied.vercel.app/api/open"
+        help
+            Every Solana Scavenger Hunt request is POSTed here verbatim, and the reply is
+            broadcast straight back to the badge. The relay never parses the
+            payload in either direction.
+
+            This lives on the relay rather than in the badge's request so that
+            repointing the server doesn't mean reflashing every badge, and so a
+            stranger in BLE range can't make the relay POST to an arbitrary host.
+
+    config RELAY_BOX_ID
+        string "Box id"
+        default "relay-01"
+        help
+            Identifies this station. Broadcast in the body of every idle
+            beacon; the badge puts it in the request JSON, so it reaches the
+            webhook as the "box" field.
+
+            This is the fallback boot selection: the Up-button ID editor
+            steps through the fixed station-slug list at runtime and the
+            choice persists in NVS. Set it to the slug for where this box
+            lives.
+
+            Max 39 characters, to match the badge's box id buffer.
+
+    config RELAY_SELFTEST_ON_BOOT
+        bool "POST a test request at boot"
+        default y
+        help
+            Sends one canned request to the webhook during startup and logs the
+            result. Lets you verify WiFi, DNS, TLS, and the server before any
+            BLE traffic exists. Safe to leave on.
+
+    config RELAY_SUPABASE_URL
+        string "Supabase URL for heartbeats"
+        default "https://qoouxoeavyuokuscvxff.supabase.co"
+        help
+            Project URL for the 3-minute heartbeat (touch_relay_heartbeat
+            RPC). Same project as the relay server's box_decisions table.
+
+    config RELAY_SUPABASE_ANON_KEY
+        string "Supabase anon key for heartbeats"
+        default ""
+        help
+            Publishable anon key (Project Settings -> API). Only used to
+            call the touch_relay_heartbeat() RPC; the heartbeat tables
+            have no public access. Empty disables the heartbeat task.
+
+    config RELAY_MAC_EDIT_ENABLE
+        bool "Down-button WiFi MAC editor (NVS-persisted override)"
+        default n
+        help
+            Lets the Down button set a custom STA-MAC last byte (A0..B3),
+            persisted in NVS and taking precedence over RELAY_WIFI_STA_MAC.
+            Off while venue debugging: the box then uses RELAY_WIFI_STA_MAC
+            (or the chip MAC when empty) with no runtime override.
+
+    config RELAY_HEARTBEAT_ENABLE
+        bool "Send a Supabase heartbeat every 3 minutes"
+        default y
+        help
+            POSTs this box's id to Supabase on a loop. A pg_cron watchdog
+            Slacks when a box goes stale (see the _heartbeats migration).
+            Needs SUPABASE_ANON_KEY above; without it the task exits.
+
+    config RELAY_SCREEN_ENABLE
+        bool "LCD status screen (same panel as the badge)"
+        default y
+        help
+            Shows what the relay is doing on the badge-family LCD
+            (ST7789 320x240 over SPI, rendered with LVGL — the same
+            graphics system as the badge). The display is status-only:
+            without it the relay runs headless and every screen call
+            is a no-op.
+
+endmenu

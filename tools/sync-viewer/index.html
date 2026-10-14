@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Badge Snapshot Viewer</title>
+<style>
+  :root {
+    --bg:#0a0e1a; --panel:#0f1422; --border:#2d4a6b; --accent:#00d9ff;
+    --text:#e0e8f0; --dim:#6a7a9a; --ok:#36e07a; --bad:#ff5c8a; --warn:#ffd166;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:24px; background:var(--bg); color:var(--text);
+    font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  .wrap { max-width:960px; margin:0 auto; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--dim); margin:0 0 20px; }
+  .panel {
+    background:var(--panel); border:1px solid var(--border);
+    border-radius:10px; padding:18px; margin-bottom:16px;
+  }
+  .bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  button {
+    min-width:160px; min-height:44px; padding:10px 12px;
+    border-radius:8px; border:1px solid var(--border);
+    background:#16203a; color:var(--text); font:inherit; font-weight:600; cursor:pointer;
+  }
+  button:hover:not(:disabled) { border-color:var(--accent); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  button.primary { background:var(--accent); color:#04121a; border-color:var(--accent); }
+  #status { padding:14px 16px; border-radius:10px; font-size:16px; font-weight:600;
+    margin-bottom:16px; border:1px solid var(--border); background:var(--panel); }
+  #status.ok   { background:#0d2a1a; border-color:var(--ok);   color:var(--ok); }
+  #status.bad  { background:#2a0d18; border-color:var(--bad);  color:var(--bad); }
+  #status.busy { background:#2a2410; border-color:var(--warn); color:var(--warn); }
+  #status small { display:block; font-weight:400; font-size:14px; color:var(--text);
+    margin-top:6px; opacity:.85; }
+  #summary { font-size:14px; color:var(--text); }
+  #summary b { color:var(--accent); }
+  #out {
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px;
+    white-space:pre-wrap; word-break:break-word;
+    max-height:60vh; overflow:auto; background:#060911;
+    padding:12px; border-radius:6px; margin-top:12px; color:#a9bcd8;
+  }
+  .hint { font-size:13px; color:var(--dim); }
+  #log { font-family:ui-monospace,monospace; font-size:11px; white-space:pre-wrap;
+    max-height:160px; overflow:auto; background:#060911; padding:10px;
+    border-radius:6px; margin-top:10px; color:#7c8db0; }
+  details summary { cursor:pointer; color:var(--dim); font-size:14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Badge Snapshot Viewer</h1>
+<p class="sub">Fetch the <span class="mono">snapshot</span> JSON over USB and print it here.
+Later this is what gets POSTed to the sync endpoint.</p>
+
+<div id="status">Not connected<small>Connect a powered badge to begin.</small></div>
+
+<div class="panel">
+  <div class="bar">
+    <button id="connect" class="primary">Connect badge</button>
+    <button id="fetch" disabled>Fetch snapshot</button>
+    <button id="disconnect" disabled>Disconnect</button>
+  </div>
+  <p class="hint">
+    Uses Web Serial (desktop Chrome/Edge, served over HTTPS or
+    <span class="mono">localhost</span>). Pick the port named
+    <strong>USB JTAG/serial debug unit</strong>. Sends the badge's
+    <span class="mono">snapshot</span> console command and prints the reply.
+  </p>
+</div>
+
+<div class="panel">
+  <div id="summary" class="hint">No snapshot yet.</div>
+  <div id="out">(snapshot output appears here)</div>
+</div>
+
+<details class="panel">
+  <summary>Serial log</summary>
+  <div id="log"></div>
+</details>
+
+</div>
+<script>
+"use strict";
+
+// Talks to the badge's esp_console REPL over USB-Serial-JTAG.
+// Protocol lives in main/hal/hal_console.cpp:
+//   snapshot        -> one JSON line (the fs_mirror document the Sync app
+//                      uploads over BLE), then "bytes=.. crc32=.." + counters
+//   snapshot stats  -> counters only
+//
+// Wire traps shared with tools/badge-provision/index.html and tools/badge/badge.py:
+//   * Terminate commands with a bare CR, never CRLF. The console RX uses
+//     ESP_LINE_ENDINGS_CR, so "\r\n" arrives as TWO line terminators and the
+//     stray one corrupts whatever comes next.
+//   * The snapshot reply is ~13-20 KB; allow a generous timeout.
+const BAUD = 115200;
+const PROMPT = "badge> ";
+// ESP_LOG lines ("I (12345) TAG: msg") interleave with command output at any
+// time, so filter them rather than letting them corrupt the reply.
+const LOG_LINE = /^[IWEDV] \(\d+\) [^:]{1,32}: /;
+
+let port = null, writer = null, reader = null, rx = "", readLoopPromise = null;
+let operationBusy = false;
+
+const $ = (s) => document.querySelector(s);
+const els = {
+  status: $("#status"), connect: $("#connect"), fetch: $("#fetch"),
+  disconnect: $("#disconnect"), summary: $("#summary"),
+  out: $("#out"), log: $("#log"),
+};
+
+function updateControls() {
+  const connected = !!(port && writer);
+  els.connect.disabled = connected || operationBusy;
+  els.fetch.disabled = !connected || operationBusy;
+  els.disconnect.disabled = !connected || operationBusy;
+}
+function setBusy(b) { operationBusy = b; updateControls(); }
+function setStatus(msg, cls, detail) {
+  els.status.className = cls || "";
+  els.status.innerHTML = "";
+  els.status.append(msg);
+  if (detail) {
+    const s = document.createElement("small");
+    s.textContent = detail;
+    els.status.append(s);
+  }
+}
+function log(s) {
+  els.log.textContent += s;
+  els.log.scrollTop = els.log.scrollHeight;
+}
+
+// --- serial ---------------------------------------------------------------
+
+async function readLoop(activePort) {
+  const dec = new TextDecoder();
+  try {
+    while (port === activePort && activePort.readable) {
+      const streamReader = activePort.readable.getReader();
+      reader = streamReader;
+      try {
+        for (;;) {
+          const { value, done } = await streamReader.read();
+          if (done) break;
+          rx += dec.decode(value, { stream: true });
+        }
+      } finally {
+        streamReader.releaseLock();
+        if (reader === streamReader) reader = null;
+      }
+      break;
+    }
+  } catch (e) {
+    if (port === activePort) void connectionLost(e);
+  }
+}
+
+// One CR in, one newline at the badge. Never CRLF (see header comment).
+async function sendLine(s) {
+  if (!writer) throw new Error("badge is not connected");
+  await writer.write(new TextEncoder().encode(s + "\r"));
+}
+
+function waitFor(token, ms) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    (function poll() {
+      const i = rx.indexOf(token);
+      if (i >= 0) {
+        const got = rx.slice(0, i + token.length);
+        rx = rx.slice(i + token.length);
+        return resolve(got);
+      }
+      if (!port) return reject(new Error("badge disconnected"));
+      if (Date.now() - started > ms)
+        return reject(new Error("timed out waiting for " + JSON.stringify(token)));
+      setTimeout(poll, 20);
+    })();
+  });
+}
+
+// Nudge the REPL to a known state: Ctrl-C clears any half-typed line, the bare
+// newline forces a prompt even if we attached mid-stream and missed the first.
+async function sync(attempts) {
+  for (let i = 0; i < attempts; i++) {
+    rx = "";
+    try {
+      await writer.write(new Uint8Array([0x03]));
+      await sendLine("");
+      await waitFor(PROMPT, 1500);
+      return true;
+    } catch (_) { if (!port) break; }
+  }
+  return false;
+}
+
+// Send one command; resolve with everything up to the next prompt.
+async function ask(cmd, ms) {
+  rx = "";
+  await sendLine(cmd);
+  return await waitFor(PROMPT, ms);
+}
+
+async function cleanup() {
+  try { reader && await reader.cancel(); } catch (_) {}
+  try { await readLoopPromise; } catch (_) {}
+  try { writer && writer.releaseLock(); } catch (_) {}
+  writer = reader = readLoopPromise = null;
+  try { port && await port.close(); } catch (_) {}
+  port = null;
+  rx = "";
+  updateControls();
+}
+
+async function connectionLost(e) {
+  await cleanup();
+  setStatus("Disconnected", "bad",
+    (e && e.message ? e.message + ". " : "") + "Press Connect badge to reconnect.");
+}
+
+async function connect() {
+  if (!("serial" in navigator)) {
+    setStatus("Web Serial not supported", "bad", "Use Chrome or Edge on desktop.");
+    return;
+  }
+  setBusy(true);
+  setStatus("Choose the badge's serial port…", "busy",
+    "Select USB JTAG/serial debug unit (often shown as Espressif).");
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: BAUD, bufferSize: 65536 });
+    writer = port.writable.getWriter();
+    readLoopPromise = readLoop(port);
+    port.addEventListener("disconnect", () => {
+      if (port) void connectionLost(new Error("USB connection closed"));
+    }, { once: true });
+
+    setStatus("Checking badge…", "busy");
+    if (!(await sync(3))) {
+      await cleanup();
+      setStatus("No response — ready to reconnect", "bad",
+        "Port opened, but the console never answered. Check power and cable.");
+      return;
+    }
+    setStatus("Connected — badge is responding", "ok",
+      "Press Fetch snapshot to print the filesystem JSON.");
+  } catch (e) {
+    await cleanup();
+    const cancelled = e && e.name === "NotFoundError";
+    setStatus(cancelled ? "Connection cancelled" : "Connect failed — ready to retry",
+      cancelled ? "" : "bad",
+      cancelled ? "No port selected."
+                : String((e && e.message) || e));
+  } finally {
+    setBusy(false);
+  }
+}
+
+// --- snapshot --------------------------------------------------------------
+
+function summarizeReply(reply) {
+  // Drop the command echo and ESP_LOG chatter; keep badge output lines.
+  const lines = reply.replace(/\r/g, "").split("\n")
+    .map((x) => x.trim())
+    .filter((x) => x && x !== "badge>" && !LOG_LINE.test(x));
+  // The echo ("snapshot") is the first line when present.
+  if (lines.length && lines[0] === "snapshot") lines.shift();
+  return lines;
+}
+
+async function fetchSnapshot() {
+  setBusy(true);
+  setStatus("Fetching snapshot…", "busy", "The badge walks LittleFS; ~1-2 s.");
+  els.summary.textContent = "Fetching…";
+  els.out.textContent = "";
+  try {
+    const reply = await ask("snapshot", 30000);
+    const lines = summarizeReply(reply);
+    const jsonLine = lines.find((l) => l.startsWith("{"));
+    if (!jsonLine) throw new Error("no JSON document in reply (" + lines.join(" | ").slice(0, 160) + ")");
+    const doc = JSON.parse(jsonLine);
+
+    // Print the whole document, pretty. This is the content that will
+    // eventually be POSTed to the sync endpoint.
+    els.out.textContent = JSON.stringify(doc, null, 2);
+
+    const names = Object.keys(doc.files || {});
+    const counts = doc.counts || {};
+    els.summary.innerHTML = "";
+    const b = (t) => { const e = document.createElement("b"); e.textContent = t; return e; };
+    els.summary.append("badge ", b(doc.badge_id || "?"), " - ",
+      String(names.length), " files (text ", b(String(counts.text ?? "?")),
+      ", binary ", String(counts.binary ?? "?"), ", too_big ",
+      String(counts.too_big ?? "?"), ", dropped ",
+      String(counts.dropped ?? "?"), ") - complete ",
+      b(doc.complete ? "yes" : "no"), " - ",
+      (jsonLine.length / 1024).toFixed(1), " KB JSON");
+    const trailers = lines.filter((l) => !l.startsWith("{"));
+    setStatus("Snapshot received", "ok",
+      trailers.join("  ") || "Printed below.");
+    log("\n[fetch ok " + jsonLine.length + " bytes]\n");
+  } catch (e) {
+    setStatus("Fetch failed", "bad", String((e && e.message) || e));
+    els.summary.textContent = "No snapshot yet.";
+  } finally {
+    setBusy(false);
+  }
+}
+
+els.connect.addEventListener("click", connect);
+els.fetch.addEventListener("click", fetchSnapshot);
+els.disconnect.addEventListener("click", async () => {
+  await cleanup();
+  setStatus("Not connected", "", "Connect a powered badge to begin.");
+});
+updateControls();
+</script>
+</body>
+</html>

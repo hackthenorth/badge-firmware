@@ -1,0 +1,108 @@
+name: Deploy Web Flasher
+
+# Publishes the badge web tools to GitHub Pages in a single deployment:
+#   /          -> factory flasher (Chinese)  — serves the COMMITTED factory-test
+#                 binaries in tools/web-flasher/firmware/ (FACTORY_TEST_BUILD=1).
+#   /eng/      -> engineer flasher (English) — serves NORMAL launcher firmware
+#                 (FACTORY_TEST_BUILD=0) that this workflow BUILDS fresh each run.
+#   /badgectl/ -> the badgectl web tool (static; copied from tools/badgectl/web).
+#   /register/ -> registration/provisioning tool (static; copied from
+#                 tools/badge-provision).
+#   /blindbox/ -> Blind Box Web Serial proof of concept (static; copied from
+#                 tools/blindbox-web).
+#   /sync-viewer/ -> badge snapshot viewer (static; copied from
+#                    tools/sync-viewer).
+#
+# One artifact, one deploy-pages step, so every tool ships together and never
+# clobbers another path. Refresh the factory image by committing new binaries
+# (see tools/web-flasher/firmware/README.md).
+#
+# Runs on every push to main and on manual dispatch.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Allow one concurrent deployment; let in-progress runs finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Default build -> FACTORY_TEST_BUILD=0 -> normal launcher firmware (/eng).
+      - name: Build engineer firmware (ESP-IDF v5.5.3)
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.3
+          target: esp32c3
+          command: idf.py build
+
+      - name: Stage firmware
+        run: |
+          set -euo pipefail
+          root=tools/web-flasher/firmware
+          eng=tools/web-flasher/eng/firmware
+          mkdir -p "$eng"
+
+          # /eng: the freshly built normal firmware.
+          cp build/bootloader/bootloader.bin           "$eng/bootloader.bin"
+          cp build/partition_table/partition-table.bin "$eng/partition-table.bin"
+          app=$(ls build/*.bin | grep -v -E 'bootloader|partition' | head -1)
+          cp "$app" "$eng/firmware.bin"
+          sha256sum "$eng/firmware.bin" | awk '{print $1}' > "$eng/firmware.bin.sha256"
+
+          # /: the committed factory-test binaries; publish their build hash.
+          test -f "$root/firmware.bin" || { echo "ERROR: committed factory firmware.bin missing — commit it (see $root/README.md)"; exit 1; }
+          sha256sum "$root/firmware.bin" | awk '{print $1}' > "$root/firmware.bin.sha256"
+
+          # /badgectl: the static web tool. Drop the .vite build cache.
+          rm -rf tools/web-flasher/badgectl
+          cp -r tools/badgectl/web tools/web-flasher/badgectl
+          rm -rf tools/web-flasher/badgectl/.vite
+
+          # /register: the static registration/provisioning tool.
+          rm -rf tools/web-flasher/register
+          cp -r tools/badge-provision tools/web-flasher/register
+
+          # /blindbox: the static Web Serial Blind Box bridge.
+          rm -rf tools/web-flasher/blindbox
+          cp -r tools/blindbox-web tools/web-flasher/blindbox
+          # /sync-viewer: the static USB snapshot viewer.
+          rm -rf tools/web-flasher/sync-viewer
+          cp -r tools/sync-viewer tools/web-flasher/sync-viewer
+
+          # Keep local-only .gitignores out of the published artifact.
+          rm -f "$root/.gitignore" "$eng/.gitignore"
+
+          echo "== eng (built) =="; ls -lh "$eng"
+          echo "== factory (committed) =="; ls -lh "$root"
+          echo "== badgectl =="; ls -lh tools/web-flasher/badgectl
+          echo "== register =="; ls -lh tools/web-flasher/register
+          echo "== blindbox =="; ls -lh tools/web-flasher/blindbox
+          echo "== sync-viewer =="; ls -lh tools/web-flasher/sync-viewer
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: tools/web-flasher
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

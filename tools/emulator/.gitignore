@@ -1,0 +1,3 @@
+# Local Emscripten toolchain (build.py --install-emsdk) and intermediate objects.
+.emsdk/
+.build/

@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>2026 Hacker Badge — Web Flasher</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #2ea043;
+      --accent-hover: #3fb950;
+      --error: #f85149;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      padding: 24px;
+    }
+    .card {
+      width: 100%;
+      max-width: 440px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 40px 32px;
+      text-align: center;
+    }
+    h1 { font-size: 1.5rem; margin: 0 0 4px; }
+    .subtitle { color: var(--muted); margin: 0 0 28px; font-size: 0.95rem; }
+
+    button {
+      appearance: none;
+      border: 0;
+      background: var(--accent);
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 600;
+      padding: 13px 28px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.15s ease, opacity 0.15s ease;
+      min-width: 180px;
+    }
+    button:hover { background: var(--accent-hover); }
+    button:disabled { opacity: 0.6; cursor: default; }
+
+    /* progress */
+    .bar {
+      width: 100%;
+      height: 10px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 22px 0 12px;
+    }
+    .bar > div {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      transition: width 0.15s ease;
+    }
+    .status { color: var(--muted); font-size: 0.9rem; min-height: 1.2em; }
+
+    .big-icon { font-size: 3.2rem; line-height: 1; margin-bottom: 12px; }
+    .ok { color: var(--accent); }
+    .bad { color: var(--error); }
+    .err-msg {
+      color: var(--error);
+      font-size: 0.85rem;
+      margin: 8px 0 20px;
+      word-break: break-word;
+    }
+
+    /* Chinese secondary text, e.g. under English headings/buttons */
+    .zh { display: block; font-size: 0.85em; font-weight: 400; opacity: 0.85; margin-top: 3px; }
+
+    .screenshot {
+      width: 100%;
+      display: block;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin: 0 0 24px;
+    }
+
+    .thanks {
+      margin-top: 24px;
+      font-size: 0.9rem;
+      color: var(--accent);
+    }
+
+    .hidden { display: none !important; }
+    footer { margin-top: 14px; font-size: 0.8rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>2026 Hacker Badge<span class="zh">2026 黑客徽章</span></h1>
+    <p class="subtitle">Plug in a badge and flash it.<span class="zh">插入徽章并刷写固件。</span></p>
+
+    <img class="screenshot" src="image.png" alt="How to flash the badge / 如何刷写徽章"
+         onerror="this.style.display='none'" />
+
+    <!-- IDLE -->
+    <section id="idle">
+      <button id="flash-btn">Flash a Badge<span class="zh">刷写徽章</span></button>
+    </section>
+
+    <!-- FLASHING -->
+    <section id="flashing" class="hidden">
+      <div class="bar"><div id="bar-fill"></div></div>
+      <div class="status" id="status">Connecting… 连接中…</div>
+    </section>
+
+    <!-- SUCCESS -->
+    <section id="success" class="hidden">
+      <div class="big-icon ok">✓</div>
+      <div class="status" style="color: var(--text); margin-bottom: 20px;">
+        Flashed successfully<span class="zh">刷写成功</span>
+      </div>
+      <button id="close-btn">Close<span class="zh">关闭</span></button>
+    </section>
+
+    <!-- ERROR -->
+    <section id="error" class="hidden">
+      <div class="big-icon bad">✕</div>
+      <div class="err-msg" id="error-msg"></div>
+      <button id="retry-btn">Try Again<span class="zh">重试</span></button>
+    </section>
+
+    <div id="unsupported" class="err-msg hidden">
+      This browser can't access serial devices. Use desktop Chrome, Edge, or Opera over HTTPS.
+      <span class="zh">此浏览器无法访问串口设备。请使用桌面版 Chrome、Edge 或 Opera，并通过 HTTPS 访问。</span>
+    </div>
+
+    <p class="thanks">感谢 JLCPCB 对我们的帮助</p>
+    <footer>ESP32-C3 - Web Serial<span id="fw-hash" class="hidden"></span></footer>
+  </main>
+
+  <script type="module">
+    import { ESPLoader, Transport, UsbJtagSerialReset } from "./vendor/esptool-js-0.5.4.bundle.js";
+
+    // Flash layout — matches partitions.csv / flasher_args.json.
+    const PARTS = [
+      { path: "./firmware/bootloader.bin",      address: 0x0     },
+      { path: "./firmware/partition-table.bin", address: 0x8000  },
+      { path: "./firmware/firmware.bin",        address: 0x10000 },
+    ];
+
+    const $ = (id) => document.getElementById(id);
+    const sections = {
+      idle: $("idle"),
+      flashing: $("flashing"),
+      success: $("success"),
+      error: $("error"),
+    };
+
+    function show(name) {
+      for (const [k, el] of Object.entries(sections)) el.classList.toggle("hidden", k !== name);
+    }
+    function setStatus(t) { $("status").textContent = t; }
+    function setProgress(pct) { $("bar-fill").style.width = pct + "%"; }
+
+    // Fetch a .bin and return it as a binary string (esptool-js wants 1 char/byte).
+    async function fetchBinaryString(path) {
+      const res = await fetch(path, { cache: "no-store" });
+      if (!res.ok) throw new Error(`Couldn't load ${path} (${res.status})`);
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      let s = "";
+      const CHUNK = 0x8000;
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        s += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+      }
+      return s;
+    }
+
+    async function flash() {
+      let transport, esploader;
+      try {
+        // 1. Ask the user to pick the badge's serial port.
+        const port = await navigator.serial.requestPort();
+
+        // From here on it's all automatic — no prompts.
+        show("flashing");
+        setProgress(0);
+        setStatus("Connecting… 连接中…");
+
+        transport = new Transport(port, true);
+        esploader = new ESPLoader({ transport, baudrate: 921600, romBaudrate: 115200 });
+        await esploader.main();
+
+        // 2. Load the binaries.
+        setStatus("Loading firmware… 加载固件中…");
+        const fileArray = [];
+        for (const part of PARTS) {
+          fileArray.push({ data: await fetchBinaryString(part.path), address: part.address });
+        }
+
+        // 3. Flash. Overall progress across all parts.
+        const sizes = fileArray.map((f) => f.data.length);
+        const total = sizes.reduce((a, b) => a + b, 0);
+        setStatus("Flashing… do not unplug 刷写中…请勿拔出");
+
+        await esploader.writeFlash({
+          fileArray,
+          flashSize: "keep",
+          flashMode: "keep",
+          flashFreq: "keep",
+          eraseAll: false,
+          compress: true,
+          reportProgress: (idx, written) => {
+            const done = sizes.slice(0, idx).reduce((a, b) => a + b, 0) + written;
+            setProgress(Math.round((done / total) * 100));
+          },
+        });
+
+        setProgress(100);
+
+        // 4. Reboot into the freshly flashed app. The badge is native
+        //    USB-Serial-JTAG, so use that reset sequence. The reset pulse makes
+        //    the chip re-enumerate its USB device mid-sequence, so the tail of
+        //    reset() (and the disconnect() below) will throw "device lost" —
+        //    that's the chip rebooting, not a failure, so we ignore it. The
+        //    generic RTS hard reset is a no-op on a native-USB part, so there's
+        //    no point falling back to it here.
+        setStatus("Restarting… 重启中…");
+        try {
+          await new UsbJtagSerialReset(transport).reset();
+        } catch (err) {
+          console.debug("reset ended early (re-enumeration, expected):", err);
+        }
+
+        show("success");
+      } catch (err) {
+        // User cancelled the port picker — just go back to idle, no error.
+        if (err && (err.name === "NotFoundError" || /No port selected/i.test(err.message || ""))) {
+          show("idle");
+        } else {
+          console.error(err);
+          $("error-msg").textContent = (err && err.message) ? err.message : String(err);
+          show("error");
+        }
+      } finally {
+        // Release the port so the next badge can be selected cleanly.
+        try { await transport?.disconnect(); } catch (_) {}
+      }
+    }
+
+    // Show the firmware build hash, if published alongside the binaries (CI
+    // writes firmware/firmware.bin.sha256). Absent in local checkouts — hidden.
+    fetch("./firmware/firmware.bin.sha256", { cache: "no-store" })
+      .then((r) => (r.ok ? r.text() : null))
+      .then((h) => {
+        h = (h || "").trim().split(/\s+/)[0];
+        if (!/^[0-9a-f]{64}$/i.test(h)) return;
+        const el = $("fw-hash");
+        el.textContent = ` - fw ${h.slice(0, 12)}`;
+        el.title = `firmware.bin SHA-256: ${h}`;
+        el.classList.remove("hidden");
+      })
+      .catch(() => {});
+
+    if (!("serial" in navigator)) {
+      sections.idle.classList.add("hidden");
+      $("unsupported").classList.remove("hidden");
+    } else {
+      $("flash-btn").addEventListener("click", flash);
+      $("retry-btn").addEventListener("click", flash);
+      $("close-btn").addEventListener("click", () => show("idle"));
+    }
+  </script>
+</body>
+</html>

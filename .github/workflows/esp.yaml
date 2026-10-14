@@ -1,0 +1,118 @@
+name: ESP-IDF Build + Size Report
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build-and-size:
+    name: Build + idf.py size
+    runs-on: ubuntu-latest
+
+    # Run the whole job inside Espressif's ESP-IDF container
+    container:
+      image: espressif/idf:v5.5.3
+      env:
+        # Avoid "dubious ownership" errors when Actions checks out as a different UID
+        IDF_GIT_SAFE_DIR: "*"
+        HOME: /tmp
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # Seconds, and it fails fast: a bbx_proto.h that has drifted between the
+      # badge and a station binary builds cleanly on both sides and then fails
+      # silently on the air as "the badge never gets a response".
+      - name: Check bbx_proto.h copies agree
+        run: python3 tools/check-bbx-proto.py
+
+      # Seconds, same idea: the reboot-into-app wiring is spread over the
+      # trait, HAL queries, registry rules, and boot routing, and half of it
+      # fails silently as "just switches directly".
+      - name: Check reboot-into-app contracts
+        run: python3 tools/check-reboot-contracts.py
+
+      - name: Check badge sync, radio transfer, and contacts
+        run: |
+          python3 tools/test-sync-upload.py
+          python3 tools/test-sync-radio.py
+          python3 tools/test-snapshot-file.py
+          python3 tools/test-contacts-store.py
+
+      - name: Show ESP-IDF version
+        run: |
+          . /opt/esp/idf/export.sh
+          echo "IDF_PATH=$IDF_PATH"
+          idf.py --version
+
+      - name: Build
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh
+          idf.py build
+
+      - name: Capture size report
+        id: size
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh
+          idf.py size | tee size.txt
+          {
+            echo 'result<<EOF'
+            cat size.txt
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Comment PR
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: build-status
+          message: |
+            ## Build Status
+
+            Result: `${{ steps.size.outputs.result }}`
+
+      - name: Zip build
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          cd $GITHUB_WORKSPACE
+          zip -r build.zip build
+
+      - name: Upload artifact to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: build.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  admin-protocol:
+    name: Admin console and dashboard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install host crypto library
+        run: sudo apt-get update && sudo apt-get install -y libsodium-dev
+      - name: Check authenticated provisioning
+        run: |
+          python3 tools/test-admin-console.py
+          node tools/test-admin-dashboard.mjs

@@ -1,0 +1,61 @@
+# This file was generated using idf.py save-defconfig. It can be edited manually.
+# Espressif IoT Development Framework (ESP-IDF) 5.5.3 Project Minimal Configuration
+#
+CONFIG_IDF_TARGET="esp32c3"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=3072
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+CONFIG_BT_NIMBLE_SM_LEGACY=n
+CONFIG_BT_NIMBLE_SM_SC=n
+CONFIG_BT_NIMBLE_EXT_ADV=y
+# Radio RAM diet: this badge only broadcasts small manufacturer payloads
+# (<=225 B, AD blob <=229 B) and passively scans. It never connects, never
+# uses periodic advertising, and only speaks 1M PHY. The stock NimBLE tuning
+# (1650 B adv buffers, 24 ACL buffers, periodic sync, 2M/coded PHY, 6
+# controller activities) costs ~67 KB of the ~182 KB heap at init and leaves
+# ~84 B free, so any perturbation aborts init (SYSINIT_PANIC_ASSERT) and the
+# radio never comes up. These trims reclaim ~17 KB while keeping every path
+# the badge actually uses at full size. See hal_radio.cpp init_once.
+CONFIG_BT_NIMBLE_EXT_ADV_MAX_SIZE=251
+CONFIG_BT_NIMBLE_TRANSPORT_ACL_FROM_LL_COUNT=2
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=6
+# No connections or queued ACL traffic: one advertising mbuf is handed to
+# HCI at a time. Keep six larger mbufs as headroom rather than the stock 24;
+# that unused pool otherwise leaves the controller unable to allocate DATA
+# advertising updates while Sync holds its file and profile buffer.
+CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=6
+# High-priority HCI event buffers (everything except advertising reports,
+# which use the separate discard pool). Commands complete sequentially; keep
+# twelve slots without reserving the stock 30 in this connectionless build.
+CONFIG_BT_NIMBLE_TRANSPORT_EVT_COUNT=12
+# CONFIG_BT_NIMBLE_ENABLE_PERIODIC_ADV is not set
+# CONFIG_BT_NIMBLE_ENABLE_PERIODIC_SYNC is not set
+# CONFIG_BT_NIMBLE_LL_CFG_FEAT_LE_2M_PHY is not set
+# CONFIG_BT_NIMBLE_LL_CFG_FEAT_LE_CODED_PHY is not set
+CONFIG_BT_CTRL_BLE_MAX_ACT=3
+CONFIG_BT_CTRL_ADV_DUP_FILT_MAX=1
+CONFIG_BT_CTRL_DFT_TX_POWER_LEVEL_N3=y
+CONFIG_BT_CTRL_MODEM_SLEEP=y
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_PM_ENABLE=y
+CONFIG_PM_DFS_INIT_AUTO=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_80=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_22=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_DEFAULT_MONTSERRAT_18=y
+# LVGL pool: 40 KB OOM-crashed Mines9 (81 cells + 81 glyphs + labels, ~165
+# widgets) in lv_obj_class_create_obj's unchecked children realloc, so back
+# to 64 KB. The Sync snapshot / radio-init heap squeeze that motivated the
+# 40 KB cut needs a different fix (see heap `lv_max_used` vs sys_free).
+CONFIG_LV_MEM_SIZE_KILOBYTES=64
+CONFIG_LV_USE_FS_POSIX=y
+CONFIG_LV_FS_POSIX_LETTER=65
+CONFIG_LV_USE_QRCODE=y

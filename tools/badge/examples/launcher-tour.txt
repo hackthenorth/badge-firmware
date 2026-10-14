@@ -1,0 +1,27 @@
+# Walk from the launcher into the second app and photograph both screens.
+#
+# Run it with:  tools/badge/badge.py --out-dir /tmp run tools/badge/examples/launcher-tour.txt
+#
+# `settle` matters: button events are drained by a 50 ms LVGL timer, and an
+# app's on_enter() may animate, so capturing immediately after a press gets you
+# the previous screen or a half-drawn one.
+
+press Home
+settle 400
+shot 01-launcher.png
+tree 01-launcher.txt
+
+press Right
+settle 250
+shot 02-focus-moved.png
+
+press A
+settle 600
+shot 03-app-open.png
+tree 03-app-open.txt
+
+# Prove we actually left the launcher rather than capturing three identical
+# screens, which is the failure this whole script exists to catch.
+press Home
+settle 400
+tree

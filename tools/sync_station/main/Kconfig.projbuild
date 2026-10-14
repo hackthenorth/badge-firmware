@@ -1,0 +1,173 @@
+menu "Badge Sync Station"
+
+    config SYNC_WIFI_SSID
+        string "WiFi SSID"
+        default ""
+        help
+            Network the station joins to reach the upload endpoint. WPA2-PSK.
+
+    config SYNC_WIFI_PASSWORD
+        string "WiFi password"
+        default ""
+        help
+            Leave empty for an open network.
+
+    config SYNC_WIFI_STA_MAC
+        string "Custom WiFi STA MAC (xx:xx:xx:xx:xx:xx, empty = chip default)"
+        default ""
+        help
+            Override the WiFi station MAC, e.g. for a MAC-whitelisted IoT
+            network. Empty means keep the chip efuse MAC. Applied with
+            esp_wifi_set_mac() before wifi start.
+
+            The ID-derived MAC (sync-01 -> 24:0A:C4:C8:46:B2,
+            sync-02 -> 24:0A:C4:C8:46:B3) takes precedence over this.
+
+    config SYNC_UPLOAD_URL
+        string "HackerAPI badge upload endpoint"
+        default "https://api.hackthenorth.com/v3/badge-data/upload"
+        help
+            The station extracts the claim ID and badge token from the HTNSYNC1
+            envelope and POSTs credentials plus its snapshot as JSON parameters
+            to this fixed destination.
+            For local testing use your Mac's LAN address, not localhost (which
+            would point at the station itself). Never send credentials to a
+            request-capture service.
+
+    config SYNC_AUTH_TOKEN
+        string "Raw station password for the upload endpoint"
+        default ""
+        help
+            Sent as the JSON password parameter. An empty value disables uploads. Use the raw station password supplied separately
+            by the maintainer, not HackerAPI badgeUploadPasswordHash. Keep
+            the raw value outside source control.
+
+            Note this is compiled into the image and readable from a flash dump.
+            It authenticates the station to the server; it is not a secret that
+            survives someone walking off with the hardware.
+
+    config SYNC_MAC_DERIVE_ENABLE
+        bool "Derive WiFi STA MAC from station id (sync-01 -> B2, sync-02 -> B3)"
+        default n
+        help
+            Overrides the STA MAC with the chip base plus the ID-derived
+            last byte. Off while venue debugging: the desk then uses
+            SYNC_WIFI_STA_MAC (or the chip MAC when empty) with no runtime
+            override.
+
+    config SYNC_STATION_ID
+        string "Station id"
+        default "sync-01"
+        help
+            Identifies this station. Broadcast in the body of every idle beacon,
+            which is how a badge learns which desk it walked up to. It is local
+            radio metadata and is not sent to HackerAPI.
+
+            This is the fallback boot selection: the Up-button ID editor
+            steps between sync-01/sync-02 at runtime and the choice persists
+            in NVS. Set it to the id for where this desk lives.
+
+            Max 39 characters, to match BBX_MAX_BOX_ID.
+
+    config SYNC_MAX_BLOB_BYTES
+        int "Largest snapshot to accept (bytes)"
+        default 32768
+        range 1024 52785
+        help
+            An XFER_OPEN declaring more than this is refused with
+            BBX_ST_TOO_BIG before anything is allocated, so a badge asking for
+            an absurd transfer cannot exhaust the station's heap.
+
+            The protocol ceiling is 52785 (255 frames x 207 B); going above that
+            needs a wider seq/total in bbx_proto.h.
+
+    config SYNC_ADV_INTERVAL_MS
+        int "Advertising interval during a transfer (ms)"
+        default 30
+        range 20 1000
+        help
+            Dropped from the idle 200 ms while a session is live. The station's
+            GRANT and STAT frames are round-trip latency for the badge, so this
+            is most of what decides how long a sync takes.
+
+            20 ms is the BLE-legal floor for a non-connectable extended
+            advertisement. 30 leaves margin.
+
+    config SYNC_HTTP_TIMEOUT_MS
+        int "HTTP request timeout (ms)"
+        default 15000
+        range 2000 60000
+        help
+            Covers DNS, TLS and the whole POST. A 20-25 KB body over a busy
+            venue AP, with WiFi and BLE sharing the C3's single radio, will
+            exceed the relay's 8 s often enough to matter.
+
+    config SYNC_SELFTEST_ON_BOOT
+        bool "POST a synthetic snapshot at boot"
+        default n
+        help
+            Sends one generated ~20 KB body to the endpoint during startup and
+            logs the result. This is what proves WiFi, DNS, TLS, the chunked
+            write loop and the LWIP buffer sizing before any BLE traffic
+            exists — the riskiest part of the station, tested with the radio
+            uninvolved. Leave disabled against HackerAPI: the synthetic fixture
+            has no valid registered claim/token, so the endpoint rejects it.
+
+    config SYNC_LOOPBACK_TEST
+        bool "Run the reassembly loopback test at boot"
+        default n
+        help
+            Synthesises an OPEN + DATA sequence for a ~20 KB payload with
+            induced frame loss and feeds it straight into the receive path,
+            with no badge and no radio involved.
+
+            This is how the bitmap arithmetic gets debugged: LSB-first bit
+            order, the short final frame, and the requirement that a repeated
+            OPEN not reset a transfer in progress. Those are exactly the bugs
+            that are miserable to diagnose over the air.
+
+            Leave off in the field — it consumes a session slot at boot.
+
+    config SYNC_SUPABASE_URL
+        string "Supabase URL for heartbeats"
+        default "https://qoouxoeavyuokuscvxff.supabase.co"
+        help
+            Project URL for the 3-minute heartbeat (touch_sync_heartbeat
+            RPC). Same project as the relay server's box_decisions table.
+
+    config SYNC_SUPABASE_ANON_KEY
+        string "Supabase anon key for heartbeats"
+        default ""
+        help
+            Publishable anon key (Project Settings -> API). Only used to
+            call the touch_sync_heartbeat() RPC; the heartbeat tables
+            have no public access. Empty disables the heartbeat task.
+
+    config SYNC_HEARTBEAT_ENABLE
+        bool "Send a Supabase heartbeat every 3 minutes"
+        default y
+        help
+            POSTs this station's id to Supabase on a loop. A pg_cron
+            watchdog Slacks when a station goes stale (see the _heartbeats
+            migration). Needs SUPABASE_ANON_KEY above; without it the
+            task exits.
+
+    config SYNC_SCREEN_ENABLE
+        bool "LCD status screen (same panel as the badge)"
+        default y
+        help
+            Shows what the station is doing on the badge-family LCD
+            (ST7789 320x240 over SPI, rendered with LVGL — the same
+            graphics system as the badge). The display is status-only:
+            without it the station runs headless and every screen call
+            is a no-op.
+
+    config SYNC_AIR_DEBUG
+        bool "Show air-traffic counters on the idle screen"
+        default n
+        help
+            Appends heard/total advertisement counts to the idle line so
+            the desk can tell a deaf scan apart from a quiet room. Leave
+            off in the field.
+
+endmenu

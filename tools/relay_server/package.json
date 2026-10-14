@@ -1,0 +1,17 @@
+{
+  "name": "blindbox-relay-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Demo webhook for the Solana Scavenger Hunt badge flow — answers with a random pal reward id.",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

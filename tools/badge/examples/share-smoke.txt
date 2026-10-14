@@ -1,0 +1,34 @@
+# Share smoke check: the Share tile exists and the send list opens.
+#
+# Run it with:  tools/badge/badge.py --out-dir /tmp run tools/badge/examples/share-smoke.txt
+#
+# This only covers the single-badge side (tile + list). The full transfer
+# needs two badges; see the steps below, driven with tools/badge/duet.py.
+# Neither badge needs to move or synchronize a button press.
+
+# Tile present in the launcher grid.
+press Home
+settle 400
+tree
+expect Share
+
+# Two-badge transfer (manual, with duet.py):
+#
+#   1. Sender: Share -> Send an app -> select an app -> A: offer app.
+#      Screen shows WAIT FOR ACCEPTANCE. Leave it there; no further press.
+#   2. Receiver: Share -> Receive an app. Screen shows WAITING...
+#   3. Receiver: Incoming app shows the offer; press A: accept once.
+#      Transfer starts immediately, with a progress bar. No bump or extra A.
+#   4. Receiver: "Added '<name>'", with "Find it in your launcher" below.
+#      Press Home, allow the radio-memory cleanup reboot, verify the app tile.
+#   5. Sender: "Sent '<name>'". B cancels while offering or transferring.
+#
+# First-app regression: start with no /littlefs/apps directory. Entering Receive
+# must create it; a transfer must install without asking to free storage.
+# Failure shapes and what they mean:
+#   "Storage is full"     filesystem actually returned ENOSPC.
+#   "Couldn't access app files" inspect share_xfer console errno; do not assume full.
+#   "Lost each other"     transfer started but frames stopped arriving — hold
+#                         the badges close and still, away from laptops.
+#   "App failed validation" bytes arrived but the manifest is illegal — the
+#                           sender's app wouldn't load at boot either.

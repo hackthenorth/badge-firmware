@@ -1,0 +1,27 @@
+{
+  "label": "official badge firmware",
+  "identity": "9fe681bb7b86e90617a9050164c0568efd3706d35e9a071952feb7b28e3fc403",
+  "totalBytes": 2675936,
+  "files": [
+    {
+      "name": "bootloader.bin",
+      "offset": "0x0",
+      "size": 21024,
+      "sha256": "832decf75578ef2ff7ac1fec8282069699149db2daf895fe510001341f4bee03"
+    },
+    {
+      "name": "partition-table.bin",
+      "offset": "0x8000",
+      "size": 3072,
+      "sha256": "11a228752e2be0b2ddb6dc70ba0f1744d591c1d781f0b489a2cb79c86dfe0724"
+    },
+    {
+      "name": "firmware.bin",
+      "offset": "0x10000",
+      "size": 2651840,
+      "sha256": "b2fc91dbcb0159d79c3b15e987301979f466163a819c7a90aff0e806ed943380"
+    }
+  ],
+  "source": "tools/rapid-flash/firmware",
+  "refreshed": "2026-09-20"
+}

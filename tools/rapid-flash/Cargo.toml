@@ -1,0 +1,26 @@
+[package]
+name = "rapid-flash"
+version = "0.1.0"
+edition = "2021"
+description = "Hotplug-triggered ESP32-C3 firmware flasher: flash the split second a board is plugged in."
+license = "MIT"
+
+[[bin]]
+name = "rapid-flash"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+sha2 = "0.11"
+serialport = "4"
+espflash = { version = "4.5", default-features = false, features = ["serialport"] }
+ctrlc = "3"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = true
+strip = true

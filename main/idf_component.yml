@@ -1,0 +1,10 @@
+dependencies:
+  espp/task: ^1.0.35
+  espressif/esp_lvgl_port: ^2.3.0
+  espressif/led_strip: ^3.0.0
+  espp/st25dv: ^1.0.35
+  espp/i2c: ^1.0.35
+  abobija/rc522: '*'
+  joltwallet/littlefs: ^1.14.0
+  georgik/lua: ^5.5.0~7
+  espressif/libsodium: "*"

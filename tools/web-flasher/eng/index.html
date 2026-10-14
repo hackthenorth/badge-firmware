@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Badge Engineer Flasher</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #db6d28;
+      --accent-hover: #f0883e;
+      --error: #f85149;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      padding: 24px;
+    }
+    .card {
+      width: 100%;
+      max-width: 400px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 36px 32px;
+      text-align: center;
+    }
+    h1 { font-size: 1.25rem; margin: 0 0 24px; }
+
+    button {
+      appearance: none;
+      border: 0;
+      background: var(--accent);
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 600;
+      padding: 13px 28px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.15s ease, opacity 0.15s ease;
+      min-width: 180px;
+    }
+    button:hover { background: var(--accent-hover); }
+    button:disabled { opacity: 0.6; cursor: default; }
+
+    .mode-picker { text-align: left; margin: 0 0 20px; }
+    .mode-picker label { display: block; font-weight: 600; margin-bottom: 7px; }
+    .mode-picker select, .mode-picker input {
+      width: 100%;
+      appearance: none;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+      padding: 11px 12px;
+    }
+    .mode-note { color: var(--muted); font-size: 0.8rem; margin: 7px 0 0; }
+
+    .bar {
+      width: 100%;
+      height: 10px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 22px 0 12px;
+    }
+    .bar > div {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      transition: width 0.15s ease;
+    }
+    .status { color: var(--muted); font-size: 0.9rem; min-height: 1.2em; }
+
+    .big-icon { font-size: 3.2rem; line-height: 1; margin-bottom: 12px; }
+    .ok { color: #3fb950; }
+    .bad { color: var(--error); }
+    .err-msg {
+      color: var(--error);
+      font-size: 0.85rem;
+      margin: 8px 0 20px;
+      word-break: break-word;
+    }
+
+    .hidden { display: none !important; }
+    footer { margin-top: 16px; font-size: 0.8rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Badge Engineer Flasher</h1>
+
+    <!-- IDLE -->
+    <section id="idle">
+      <div class="mode-picker">
+        <label for="app-mode">Apps available after flashing</label>
+        <select id="app-mode">
+          <option value="default">Default apps only</option>
+          <option value="public">All public apps</option>
+          <option value="all">All apps (public + diagnostics)</option>
+        </select>
+        <p class="mode-note">Applied over the badge console once it reboots.</p>
+      </div>
+      <div class="mode-picker">
+        <label for="admin-password">Admin password</label>
+        <input id="admin-password" type="password" maxlength="96" autocomplete="off" spellcheck="false">
+        <p class="mode-note">Enter the Admin password for this firmware. It is not saved.</p>
+      </div>
+      <button id="flash-btn">Flash a Badge</button>
+    </section>
+
+    <!-- FLASHING -->
+    <section id="flashing" class="hidden">
+      <div class="bar"><div id="bar-fill"></div></div>
+      <div class="status" id="status">Connecting…</div>
+    </section>
+
+    <!-- SUCCESS -->
+    <section id="success" class="hidden">
+      <div class="big-icon ok">✓</div>
+      <div class="status" style="color: var(--text); margin-bottom: 8px;">Flashed successfully</div>
+      <p class="mode-note" id="success-note" style="margin-bottom: 20px;"></p>
+      <button id="close-btn">Flash Another</button>
+    </section>
+
+    <!-- ERROR -->
+    <section id="error" class="hidden">
+      <div class="big-icon bad">✕</div>
+      <div class="err-msg" id="error-msg"></div>
+      <button id="retry-btn">Try Again</button>
+    </section>
+
+    <div id="unsupported" class="err-msg hidden">
+      This browser can't access serial devices. Use desktop Chrome, Edge, or Opera over HTTPS.
+    </div>
+
+    <footer>ESP32-C3 - standard firmware<span id="fw-hash" class="hidden"></span></footer>
+  </main>
+
+  <script type="module">
+    import { ESPLoader, Transport, UsbJtagSerialReset } from "../vendor/esptool-js-0.5.4.bundle.js";
+
+    // Flash layout — matches partitions.csv / flasher_args.json.
+    const PARTS = [
+      { path: "./firmware/bootloader.bin",      address: 0x0,     kind: "file" },
+      { path: "./firmware/partition-table.bin", address: 0x8000,  kind: "file" },
+      { path: "./firmware/firmware.bin",        address: 0x10000, kind: "file" },
+    ];
+
+    const $ = (id) => document.getElementById(id);
+    const sections = {
+      idle: $("idle"),
+      flashing: $("flashing"),
+      success: $("success"),
+      error: $("error"),
+    };
+
+    function show(name) {
+      for (const [k, el] of Object.entries(sections)) el.classList.toggle("hidden", k !== name);
+    }
+    function setStatus(t) { $("status").textContent = t; }
+    function setProgress(pct) { $("bar-fill").style.width = pct + "%"; }
+
+    // esptool-js wants one binary-string character per byte.
+    function bytesToBinaryString(bytes) {
+      let s = "";
+      const CHUNK = 0x8000;
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        s += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+      }
+      return s;
+    }
+
+    async function fetchBinaryString(path) {
+      const res = await fetch(path, { cache: "no-store" });
+      if (!res.ok) throw new Error(`Couldn't load ${path} (${res.status})`);
+      return bytesToBinaryString(new Uint8Array(await res.arrayBuffer()));
+    }
+
+    // ---- Post-flash console step ----
+    //
+    // The app tier is badge state, so it lives in the badge's filesystem
+    // (/littlefs/config/system.cfg) and is set through the same permanent
+    // `appmode` console command the registration tool uses. There is
+    // deliberately no side-channel partition for it: one writer, one home.
+
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    // Reads until `pattern` shows up or the deadline passes. USB-Serial-JTAG
+    // ignores baudRate, but the API still requires one.
+    async function readUntil(reader, decoder, pattern, timeoutMs) {
+      const deadline = Date.now() + timeoutMs;
+      let buf = "";
+      while (Date.now() < deadline) {
+        const chunk = await Promise.race([
+          reader.read(),
+          sleep(deadline - Date.now()).then(() => ({ timedOut: true })),
+        ]);
+        if (chunk.timedOut || chunk.done) break;
+        buf += decoder.decode(chunk.value, { stream: true });
+        if (pattern.test(buf)) return buf;
+      }
+      throw new Error("badge console did not respond as expected");
+    }
+
+    async function applyAppMode(port, mode, password) {
+      // The reset above re-enumerates the device; give the badge time to boot
+      // and the console to come up before claiming the port again.
+      await sleep(3000);
+      await port.open({ baudRate: 115200 });
+
+      const reader = port.readable.getReader();
+      const writer = port.writable.getWriter();
+      const encoder = new TextEncoder();
+      const decoder = new TextDecoder();
+      try {
+        // Ctrl-C clears any partial line, then a bare newline draws the prompt.
+        await writer.write(encoder.encode("\x03\r"));
+        await readUntil(reader, decoder, /badge>/, 8000);
+
+        await writer.write(encoder.encode(`appmode ${mode} ${password}\r`));
+        const reply = await readUntil(reader, decoder,
+          new RegExp(`APP MODE OK ${mode}\\b|ADMIN AUTH FAIL|nknown app mode|nrecognized command`), 8000);
+        if (/ADMIN AUTH FAIL/.test(reply)) throw new Error("Admin password was rejected");
+        if (!reply.includes(`APP MODE OK ${mode}`)) {
+          throw new Error(`badge rejected "appmode ${mode}"`);
+        }
+      } finally {
+        try { await reader.cancel(); } catch (_) {}
+        try { reader.releaseLock(); } catch (_) {}
+        try { writer.releaseLock(); } catch (_) {}
+        try { await port.close(); } catch (_) {}
+      }
+    }
+
+    async function flash() {
+      let transport, esploader;
+      const password = $("admin-password").value.trim();
+      const mode = $("app-mode").value;
+      if (!/^[A-Za-z0-9_-]{12,96}$/.test(password)) {
+        show("idle");
+        $("admin-password").setCustomValidity("Enter the generated Admin password.");
+        $("admin-password").reportValidity();
+        return;
+      }
+      $("admin-password").setCustomValidity("");
+      try {
+        const port = await navigator.serial.requestPort();
+
+        show("flashing");
+        setProgress(0);
+        setStatus("Connecting…");
+
+        transport = new Transport(port, true);
+        esploader = new ESPLoader({ transport, baudrate: 921600, romBaudrate: 115200 });
+        await esploader.main();
+
+        setStatus("Loading firmware…");
+        const fileArray = [];
+        for (const part of PARTS) {
+          fileArray.push({ data: await fetchBinaryString(part.path), address: part.address });
+        }
+
+        const sizes = fileArray.map((f) => f.data.length);
+        const total = sizes.reduce((a, b) => a + b, 0);
+        setStatus("Flashing… do not unplug");
+
+        await esploader.writeFlash({
+          fileArray,
+          flashSize: "keep",
+          flashMode: "keep",
+          flashFreq: "keep",
+          eraseAll: false,
+          compress: true,
+          reportProgress: (idx, written) => {
+            const done = sizes.slice(0, idx).reduce((a, b) => a + b, 0) + written;
+            setProgress(Math.round((done / total) * 100));
+          },
+        });
+
+        setProgress(100);
+
+        // Native USB-Serial-JTAG reset. The reset pulse re-enumerates the USB
+        // device mid-sequence, so the tail of reset() throws "device lost" —
+        // that's the reboot, not a failure, so we swallow it.
+        setStatus("Restarting…");
+        try {
+          await new UsbJtagSerialReset(transport).reset();
+        } catch (err) {
+          console.debug("reset ended early (re-enumeration, expected):", err);
+        }
+        try { await transport.disconnect(); } catch (_) {}
+        transport = null;
+
+        // The firmware is already on the badge; a console hiccup here must not
+        // read as a failed flash. Report it as a partial success the operator
+        // can finish from the registration tool.
+        setStatus("Setting app mode…");
+        try {
+          await applyAppMode(port, mode, password);
+          $("success-note").textContent = `App mode set to "${mode}".`;
+        } catch (err) {
+          console.warn("app mode step failed:", err);
+          $("success-note").textContent =
+            `Flashed, but the app mode was not set (${err.message}). ` +
+            "Open the registration tool and program the intended app mode using the Admin password.";
+        }
+
+        show("success");
+      } catch (err) {
+        if (err && (err.name === "NotFoundError" || /No port selected/i.test(err.message || ""))) {
+          show("idle");
+        } else {
+          console.error(err);
+          $("error-msg").textContent = (err && err.message) ? err.message : String(err);
+          show("error");
+        }
+      } finally {
+        try { await transport?.disconnect(); } catch (_) {}
+      }
+    }
+
+    // Show the firmware build hash, if published alongside the binaries.
+    fetch("./firmware/firmware.bin.sha256", { cache: "no-store" })
+      .then((r) => (r.ok ? r.text() : null))
+      .then((h) => {
+        h = (h || "").trim().split(/\s+/)[0];
+        if (!/^[0-9a-f]{64}$/i.test(h)) return;
+        const el = $("fw-hash");
+        el.textContent = ` - fw ${h.slice(0, 12)}`;
+        el.title = `firmware.bin SHA-256: ${h}`;
+        el.classList.remove("hidden");
+      })
+      .catch(() => {});
+
+    if (!("serial" in navigator)) {
+      sections.idle.classList.add("hidden");
+      $("unsupported").classList.remove("hidden");
+    } else {
+      $("flash-btn").addEventListener("click", flash);
+      $("retry-btn").addEventListener("click", flash);
+      $("close-btn").addEventListener("click", () => show("idle"));
+    }
+  </script>
+</body>
+</html>

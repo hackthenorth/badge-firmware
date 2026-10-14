@@ -1,0 +1,2 @@
+# Host test binary; built on demand with `make`.
+perft

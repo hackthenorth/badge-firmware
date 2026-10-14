@@ -1,0 +1,52 @@
+CONFIG_IDF_TARGET="esp32c3"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# WiFi + NimBLE + mbedTLS + LVGL does not fit single_app_large's 1500K app
+# slot (the sync station's LVGL build is already ~1.6 MB).
+# CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE is not set
+CONFIG_PARTITION_TABLE_CUSTOM=y
+
+# BLE: broadcaster + observer only, matching the badge's hal_radio. No GATT,
+# no connections, no pairing — the whole protocol is extended advertising.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=4096
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+CONFIG_BT_NIMBLE_SM_LEGACY=n
+CONFIG_BT_NIMBLE_SM_SC=n
+CONFIG_BT_NIMBLE_EXT_ADV=y
+
+# WiFi and BLE share one 2.4 GHz radio on the C3. Without this they fight.
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+
+# The webhook is HTTPS, so we need root certs. The bundle avoids pinning a
+# specific CA, which would break the moment the host rotates its cert.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_ESP_TLS_INSECURE=n
+
+# BLE + LVGL leave little heap for HTTPS. Allocate TLS record buffers only
+# while needed so certificate verification can share that memory. Keep the
+# full incoming record limit for compatibility with both HTTPS servers.
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+
+# Relay is mains powered — no power management, we want the radio always hot.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y
+
+# Max BLE TX power (+20 dBm, the highest CONFIG_BT_CTRL_DFT_TX_POWER_LEVEL
+# choice). ble_link.c advertises with tx_power 127 (controller default), so
+# this raises the extended-advertising power with no code change.
+CONFIG_BT_CTRL_DFT_TX_POWER_LEVEL_P20=y
+
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# app_main runs the boot self-test, which does a full TLS handshake.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# LCD status screen: the same panel and graphics system as the badge
+# (ST7789 via esp_lcd + LVGL through esp_lvgl_port, both vendored from the
+# badge's managed_components). 10-row DMA stripes match the sync station; the
+# memory pool is sized for one static status screen, not a full app launcher.
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_MEM_SIZE_KILOBYTES=16

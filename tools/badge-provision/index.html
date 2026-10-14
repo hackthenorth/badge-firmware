@@ -1,0 +1,1037 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Badge Provisioning</title>
+<style>
+  :root {
+    --bg:#0a0e1a; --panel:#0f1422; --border:#2d4a6b; --accent:#00d9ff;
+    --text:#e0e8f0; --dim:#6a7a9a; --ok:#36e07a; --bad:#ff5c8a; --warn:#ffd166;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:24px; background:var(--bg); color:var(--text);
+    font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  .wrap { max-width:820px; margin:0 auto; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--dim); margin:0 0 20px; }
+  .panel {
+    background:var(--panel); border:1px solid var(--border);
+    border-radius:10px; padding:18px; margin-bottom:16px;
+  }
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  .row > label { flex:1 1 220px; }
+  label { display:block; margin-bottom:12px; }
+  .lbl { display:block; font-size:12px; color:var(--dim); margin-bottom:4px; text-transform:uppercase; letter-spacing:.04em; }
+  input, select {
+    width:100%; padding:9px 10px; background:#0a0e1a; color:var(--text);
+    border:1px solid var(--border); border-radius:6px; font:inherit;
+  }
+  input:focus, select:focus { outline:2px solid var(--accent); outline-offset:-1px; }
+  input.bad { border-color:var(--bad); }
+  button {
+    width:180px; min-height:48px; padding:10px 12px;
+    border-radius:8px; border:1px solid var(--border);
+    background:#16203a; color:var(--text); font:inherit; font-weight:600; cursor:pointer;
+  }
+  button:hover:not(:disabled) { border-color:var(--accent); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  button.primary { background:var(--accent); color:#04121a; border-color:var(--accent); }
+  button.danger { background:#351222; border-color:var(--bad); color:#ff9ab7; }
+  button.small { font-size:inherit; font-weight:600; }
+  #status { padding:16px; border-radius:10px; font-size:17px; font-weight:600; margin-bottom:16px; border:1px solid var(--border); background:var(--panel); }
+  #status.ok  { background:#0d2a1a; border-color:var(--ok);  color:var(--ok); }
+  #status.bad { background:#2a0d18; border-color:var(--bad); color:var(--bad); }
+  #status.busy{ background:#2a2410; border-color:var(--warn);color:var(--warn); }
+  #status small { display:block; font-weight:400; font-size:14px; color:var(--text); margin-top:6px; opacity:.85; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid #1a2440; }
+  th { color:var(--dim); font-weight:600; }
+  td.mono, .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .hint { font-size:13px; color:var(--dim); }
+  .connect-help { margin:12px 0 0; padding-top:12px; border-top:1px solid #1a2440; }
+  .connect-help strong { color:var(--text); }
+  .bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .spacer { flex:1; }
+  .err { color:var(--bad); font-size:12px; min-height:15px; display:block; }
+  details summary { cursor:pointer; color:var(--dim); font-size:14px; }
+  #log { font-family:ui-monospace,monospace; font-size:11px; white-space:pre-wrap;
+         max-height:220px; overflow:auto; background:#060911; padding:10px;
+         border-radius:6px; margin-top:10px; color:#7c8db0; }
+  @media (max-width:520px) {
+    .bar > button { width:100%; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Badge Provisioning</h1>
+<p class="sub">Hack the North 2026 &middot; registration desk</p>
+
+<div id="status">Not connected<small>Connect a powered badge to begin.</small></div>
+
+<div class="panel">
+  <div class="bar">
+    <button id="connect" class="primary">Connect badge</button>
+    <button id="disconnect" disabled>Disconnect</button>
+  </div>
+  <p class="hint connect-help">
+    <strong>What to look for:</strong> switch the badge off, plug in a USB-C
+    <strong>data</strong> cable, then switch it on. Click Connect and choose the
+    port named <strong>USB JTAG/serial debug unit</strong> (often shown as
+    Espressif). Don't hold <strong>Start</strong> while plugging it in.
+  </p>
+  <label><span class="lbl">Admin password</span>
+    <input id="admin-password" type="password" maxlength="96" autocomplete="off" spellcheck="false">
+  </label>
+  <p class="hint">Enter the Admin password for this badge's firmware. It is not saved.</p>
+</div>
+
+<form id="form" class="panel" autocomplete="off">
+  <div class="row">
+    <label><span class="lbl">Display name *</span>
+      <input name="display_name" maxlength="39" placeholder="Ada Lovelace" value="Ada Lovelace" required>
+      <span class="err"></span></label>
+    <label><span class="lbl">Role *</span>
+      <select name="role">
+        <option value="organizer">organizer</option>
+        <option value="sponsor">sponsor</option>
+        <option value="general">general</option>
+        <option value="workshop_lead">workshop_lead</option>
+        <option value="mentor">mentor</option>
+        <option value="judge">judge</option>
+        <option value="volunteer">volunteer</option>
+        <option value="hacker" selected>hacker</option>
+        <option value="visitor">visitor</option>
+      </select><span class="err"></span></label>
+    <label><span class="lbl">Initial apps *</span>
+      <select name="app_mode">
+        <option value="default">Default apps only</option>
+        <option value="public">All public apps</option>
+        <option value="all">Public + diagnostic apps</option>
+      </select><span class="err"></span></label>
+  </div>
+
+  <p class="hint" style="margin:-4px 0 12px">
+    Default is the attendee experience. Public unlocks every attendee-facing
+    app; diagnostics also exposes staff tools such as Test and Lanyards.
+  </p>
+
+  <div class="row">
+    <label><span class="lbl">Account email *</span>
+      <input name="account_email" maxlength="63" placeholder="ada@example.com" value="ada@example.com" required>
+      <span class="err"></span></label>
+    <label><span class="lbl">Attendee ID *</span>
+      <input name="attendee_id" inputmode="numeric" placeholder="123456" value="123456" required>
+      <span class="err"></span></label>
+  </div>
+
+  <div class="row">
+    <label><span class="lbl">Claim ID <span class="hint">(numeric)</span></span>
+      <input name="claim_id" maxlength="23" inputmode="numeric" pattern="[0-9]*" placeholder="100001" value="100001">
+      <span class="err"></span></label>
+    <label><span class="lbl">Badge ID (auto)</span>
+      <input name="badge_id" maxlength="63" class="mono">
+      <span class="err"></span></label>
+  </div>
+
+  <details>
+    <summary>Networking info (shared when badges bump)</summary>
+    <div style="margin-top:12px">
+      <div class="row">
+        <label><span class="lbl">Email</span><input name="net_email" maxlength="63" value="ada@example.com"><span class="err"></span></label>
+        <label><span class="lbl">Phone</span><input name="net_phone" maxlength="19" value="+15195550123"><span class="err"></span></label>
+      </div>
+      <div class="row">
+        <label><span class="lbl">LinkedIn <span class="hint">(slug only)</span></span>
+          <input name="net_linkedin" maxlength="39" placeholder="ada-lovelace" value="ada-lovelace"><span class="err"></span></label>
+        <label><span class="lbl">Discord</span><input name="net_discord" maxlength="39" placeholder="ada_lovelace" value="ada_lovelace"><span class="err"></span></label>
+      </div>
+      <div class="row">
+        <label><span class="lbl">Instagram <span class="hint">(no @)</span></span>
+          <input name="net_instagram" maxlength="31" placeholder="ada.lovelace" value="ada.lovelace"><span class="err"></span></label>
+        <label><span class="lbl">X <span class="hint">(no @)</span></span>
+          <input name="net_x" maxlength="31" value="adalovelace"><span class="err"></span></label>
+      </div>
+    </div>
+  </details>
+
+  <div class="bar" style="margin-top:8px">
+    <button id="program" class="primary" type="submit" disabled>Program badge</button>
+    <button id="read" type="button" disabled>Read badge data</button>
+    <button id="clear" type="button">Reset to defaults</button>
+    <button id="empty" type="button">Clear form only</button>
+    <button id="factory-reset" class="danger" type="button" disabled>Factory-reset badge</button>
+    <span class="hint">Clearing the form never changes data already stored on a badge.</span>
+  </div>
+</form>
+
+<div class="panel">
+  <div class="bar">
+    <strong>Programmed this session: <span id="count">0</span></strong>
+    <span class="spacer"></span>
+    <button id="csv" class="small" disabled>Download CSV</button>
+    <button id="wipe" class="small">Clear log</button>
+  </div>
+  <p class="hint" style="margin:8px 0 12px">
+    The <strong>BLE MAC</strong> column must be kept &mdash; it is the only way to
+    re-identify a badge that later loses its identity file.
+  </p>
+  <table>
+    <thead><tr><th>Time</th><th>Name</th><th>Role</th><th>Apps</th><th>Badge ID</th><th>BLE MAC</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+
+<details class="panel">
+  <summary>Serial log</summary>
+  <div id="log"></div>
+</details>
+
+</div>
+<script>
+"use strict";
+
+// Talks to the badge's esp_console REPL over USB-Serial-JTAG. Protocol lives
+// in main/hal/hal_console.cpp:
+//   put <path> <size>  -> prints "READY", reads exactly <size> raw bytes, prints "OK <size>"
+//   prov apply         -> re-reads identity.json, prints "PROV OK id=... mac=..." or "PROV FAIL ..."
+//   prov show          -> prints the current identity as key=value lines
+//   appmode [mode]     -> gets or sets default, public, or all app access
+//   prov erase confirm -> removes identity.json; factory_reset confirm clears config/apps and reboots
+const BAUD = 115200;
+const IDENTITY_PATH = "/littlefs/identity.json";
+const LOG_KEY = "htn-badge-provision-log";
+const APP_MODE_LABELS = Object.freeze({
+  default: "Default apps only",
+  public: "All public apps",
+  all: "Public + diagnostics",
+});
+
+// Must match the char[] widths in main/hal/hal_identity.h, minus the NUL.
+// We reject rather than truncate: a silently shortened name is a mangled
+// badge nobody notices until the event.
+const LIMITS = {
+  badge_id: 63, display_name: 39, account_email: 63, claim_id: 23,
+  net_email: 63, net_phone: 19, net_linkedin: 39,
+  net_discord: 39, net_instagram: 31, net_x: 31,
+};
+
+let port = null, writer = null, reader = null, rx = "", readLoopPromise = null;
+let operationBusy = false, cleanupPromise = null;
+let sensitiveReply = false;
+let watchedPort = null, portDisconnectHandler = null, disconnectPoll = null;
+
+const $ = (s) => document.querySelector(s);
+const els = {
+  adminPassword: $("#admin-password"),
+  status: $("#status"), connect: $("#connect"), disconnect: $("#disconnect"),
+  program: $("#program"), read: $("#read"), factoryReset: $("#factory-reset"),
+  form: $("#form"), rows: $("#rows"),
+  count: $("#count"), csv: $("#csv"), log: $("#log"),
+};
+
+function updateControls() {
+  const connected = !!(port && writer);
+  els.adminPassword.disabled = operationBusy;
+  els.connect.disabled = connected || operationBusy;
+  els.disconnect.disabled = !connected || operationBusy;
+  els.program.disabled = !connected || operationBusy;
+  els.read.disabled = !connected || operationBusy;
+  els.factoryReset.disabled = !connected || operationBusy;
+}
+
+function setBusy(busy) {
+  operationBusy = busy;
+  updateControls();
+}
+
+function setStatus(msg, cls, detail) {
+  els.status.className = cls || "";
+  els.status.innerHTML = "";
+  els.status.append(msg);
+  if (detail) {
+    const s = document.createElement("small");
+    s.textContent = detail;
+    els.status.append(s);
+  }
+}
+
+function log(s) {
+  els.log.textContent += s;
+  els.log.scrollTop = els.log.scrollHeight;
+}
+
+// ---------------------------------------------------------------- serial
+
+function stopDisconnectWatch() {
+  if (disconnectPoll !== null) clearInterval(disconnectPoll);
+  disconnectPoll = null;
+  if (watchedPort && portDisconnectHandler) {
+    try { watchedPort.removeEventListener("disconnect", portDisconnectHandler); } catch (_) {}
+  }
+  watchedPort = null;
+  portDisconnectHandler = null;
+}
+
+function startDisconnectWatch(activePort) {
+  stopDisconnectWatch();
+  watchedPort = activePort;
+  portDisconnectHandler = () => {
+    if (port === activePort) void connectionLost(new Error("USB connection closed"));
+  };
+
+  // The Web Serial event is fired at SerialPort and bubbles to
+  // navigator.serial. Listen at the source so browser differences in the
+  // bubbled event cannot leave the UI looking connected after an unplug.
+  activePort.addEventListener("disconnect", portDisconnectHandler, { once: true });
+
+  // Some browser/OS combinations deliver the stream error or disconnect event
+  // late. Poll the browser's connected-port set as a fallback so the desk UI
+  // returns to a reconnectable state promptly.
+  disconnectPoll = setInterval(async () => {
+    if (port !== activePort) return stopDisconnectWatch();
+    try {
+      const explicitlyDisconnected = "connected" in activePort && activePort.connected === false;
+      const available = explicitlyDisconnected ? [] : await navigator.serial.getPorts();
+      if (port === activePort && (explicitlyDisconnected || !available.includes(activePort))) {
+        void connectionLost(new Error("USB connection closed"));
+      }
+    } catch (_) {
+      // The read loop and direct disconnect listener remain active if a
+      // browser temporarily refuses the availability check.
+    }
+  }, 750);
+}
+
+async function connect() {
+  if (!("serial" in navigator)) {
+    setStatus("Web Serial not supported", "bad", "Use Chrome or Edge on desktop.");
+    return;
+  }
+  setBusy(true);
+  setStatus("Choose the badge's serial port…", "busy",
+    "Select USB JTAG/serial debug unit (often shown as Espressif).");
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: BAUD, bufferSize: 4096 });
+    writer = port.writable.getWriter();
+    readLoopPromise = readLoop(port);
+    startDisconnectWatch(port);
+
+    // Prove the badge is actually talking before claiming we're connected.
+    // Reporting "connected" on a dead port just moves the failure to the
+    // first real command, where it looks like a protocol bug instead of a
+    // cable/power problem.
+    setStatus("Checking badge…", "busy");
+    if (!(await sync(3))) {
+      await cleanup();
+      setStatus("No response — ready to reconnect", "bad",
+        "Port opened, but the console never answered. Check the badge is " +
+        "switched on and the cable carries data, then press Connect badge again.");
+      return;
+    }
+
+    setStatus("Connected — badge is responding", "ok",
+      "You can read its current data, program it, or factory-reset it.");
+  } catch (e) {
+    await cleanup();
+    const cancelled = e && e.name === "NotFoundError";
+    setStatus(cancelled ? "Connection cancelled" : "Connect failed — ready to retry",
+      cancelled ? "" : "bad",
+      cancelled ? "No port was selected. Press Connect badge whenever you're ready."
+                : `${String(e.message || e)} Check power and the data cable, then try again.`);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function readLoop(activePort) {
+  const dec = new TextDecoder();
+  let failure = null;
+  try {
+    while (port === activePort && activePort.readable) {
+      const streamReader = activePort.readable.getReader();
+      reader = streamReader;
+      let streamDone = false;
+      try {
+        for (;;) {
+          const { value, done } = await streamReader.read();
+          if (done) { streamDone = true; break; }
+          const text = dec.decode(value, { stream: true });
+          rx += text;
+          if (!sensitiveReply) log(text);
+        }
+      } finally {
+        streamReader.releaseLock();
+        if (reader === streamReader) reader = null;
+      }
+      if (streamDone) break;
+    }
+  } catch (e) {
+    failure = e;
+  } finally {
+    // A physical unplug, USB fault, or browser-side stream failure should
+    // immediately return the UI to a state where the next badge can connect.
+    if (port === activePort) void connectionLost(failure);
+  }
+}
+
+// The badge's USB-Serial-JTAG driver has a 256-byte RX ring buffer
+// (USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT), and the REPL installs it itself so
+// we can't enlarge it from firmware. Writing a payload bigger than that in one
+// burst overflows the ring before cmd_put's read loop can drain it: the badge
+// silently loses the tail and then blocks forever waiting for bytes that were
+// already dropped, which surfaces as a timeout on "OK <size>".
+//
+// Stay well under the buffer and give the firmware a moment between chunks.
+const CHUNK = 128;
+const CHUNK_PAUSE_MS = 20;
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function writeBytes(bytes) {
+  const activeWriter = writer;
+  if (!activeWriter) throw new Error("badge is not connected");
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    await activeWriter.write(bytes.slice(i, i + CHUNK));
+    if (i + CHUNK < bytes.length) await pause(CHUNK_PAUSE_MS);
+  }
+}
+// Terminate with a bare CR, never CRLF.
+//
+// The console sets usb_serial_jtag_vfs_set_rx_line_endings(ESP_LINE_ENDINGS_CR),
+// so an incoming \r is translated to \n. Sending "\r\n" therefore arrives as
+// "\n\n" — TWO line terminators. The REPL eats the first to end the command and
+// the second is left sitting in the stream, which is catastrophic for `put`:
+// cmd_put's first read() consumes that stray newline as file data, so the file
+// gets a leading \n plus one byte too few, the badge still reports a truthful
+// "OK <size>", and the payload's final byte spills into the next command line.
+//
+// One CR in, one newline at the badge.
+async function sendLine(s) {
+  const activeWriter = writer;
+  if (!activeWriter) throw new Error("badge is not connected");
+  log("> " + (sensitiveReply ? "[protected programming step]" : s) + "\n");
+  await activeWriter.write(new TextEncoder().encode(s + "\r"));
+}
+
+// Wait for `token` to appear in the receive stream, then consume everything
+// up to and including it and return that slice.
+function waitFor(token, ms) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    (function poll() {
+      const i = rx.indexOf(token);
+      if (i >= 0) {
+        const got = rx.slice(0, i + token.length);
+        rx = rx.slice(i + token.length);
+        return resolve(got);
+      }
+      if (!port) return reject(new Error("badge disconnected"));
+      if (Date.now() - started > ms) return reject(new Error("timed out waiting for " + JSON.stringify(token)));
+      setTimeout(poll, 20);
+    })();
+  });
+}
+
+// Send a command and return its reply, up to the next prompt.
+//
+// Clearing the buffer first is the point: without it, any output still sitting
+// there from an earlier desync gets read as though it were the answer to THIS
+// command. That is how an "Unrecognized command" left over from a stray junk
+// line gets blamed on a command that is actually fine.
+async function ask(cmd, ms) {
+  rx = "";
+  await sendLine(cmd);
+  return await waitFor("badge> ", ms);
+}
+
+// Do not display serial echo, including fragmented password bytes. The raw
+// reply stays in memory only and is sanitized before callers can log errors.
+async function askAdmin(action, password) {
+  sensitiveReply = true;
+  const redact = (text) => text.split(password).join("[hidden]");
+  try {
+    return redact(await ask(`appmode ${action} ${password}`, 5000));
+  } finally {
+    // Discard raw echo even on timeout. Keep logging suppressed until the
+    // programming operation (including recovery to a fresh prompt) finishes.
+    rx = "";
+  }
+}
+
+// Recover a badge stuck mid-transfer.
+//
+// If a previous `put` died in flight, the badge is still inside cmd_put's read
+// loop swallowing everything we send as FILE DATA — including our next command
+// line. It eventually satisfies its byte count from that garbage, writes a
+// corrupt file, and cheerfully reports "OK <size>". That is how a badge ends up
+// with a half-written identity.json and the tool still thinks it succeeded.
+//
+// Feeding it more bytes than any payload we ever send guarantees the stale read
+// completes, so the next command is parsed as a command. Spaces rather than
+// newlines: a wedged put treats them as data, and a live REPL sees one
+// over-long junk line instead of hundreds of empty ones.
+async function unwedge() {
+  await writeBytes(new Uint8Array(1024).fill(0x20));
+  await writer.write(new Uint8Array([0x03]));
+  await sendLine("");
+  await pause(150);
+}
+
+// Get the REPL to a known state: nudge it and wait for a fresh prompt.
+// Ctrl-C clears any half-typed line; the bare newline forces a prompt even if
+// the badge booted before we attached and we missed the first one.
+async function sync(attempts) {
+  for (let i = 0; i < attempts; i++) {
+    rx = "";
+    try {
+      await writeBytes(new Uint8Array([0x03]));
+      await sendLine("");
+      await waitFor("badge> ", 1500);
+      return true;
+    } catch (_) {
+      if (!port) break;
+    }
+  }
+  return false;
+}
+
+// Last few lines still sitting unconsumed in the receive buffer. Use this when
+// a wait TIMED OUT, so there is no captured reply to look at.
+function tail(n) {
+  const t = rx.replace(/\r/g, "").trim().split("\n").slice(-n).join(" | ");
+  return t ? `badge said: ${t}` : "badge sent nothing";
+}
+
+// Condense a reply we DID capture, dropping the command echo and the trailing
+// prompt so what's left is only what the badge actually said back.
+function summarize(reply) {
+  const t = reply.replace(/\r/g, "").split("\n")
+    .map((x) => x.trim())
+    .filter((x) => x && x !== "badge>" && !/^(put|prov|cat|appmode)\b/.test(x))
+    .join(" | ");
+  return t ? `badge said: ${t}` : "badge said nothing";
+}
+
+async function cleanup() {
+  if (cleanupPromise) return await cleanupPromise;
+
+  const activePort = port;
+  const activeReader = reader;
+  const activeWriter = writer;
+  const activeReadLoop = readLoopPromise;
+  stopDisconnectWatch();
+  // Clear these first so pending waits fail immediately and readLoop knows a
+  // stream closure was intentional rather than another connection failure.
+  port = null;
+  reader = null;
+  writer = null;
+  readLoopPromise = null;
+  updateControls();
+
+  cleanupPromise = (async () => {
+    try { if (activeReader) await activeReader.cancel(); } catch (_) {}
+    try { if (activeReadLoop) await activeReadLoop; } catch (_) {}
+    try { if (activeWriter) activeWriter.releaseLock(); } catch (_) {}
+    try { if (activePort) await activePort.close(); } catch (_) {}
+  })();
+  try {
+    await cleanupPromise;
+  } finally {
+    cleanupPromise = null;
+    updateControls();
+  }
+}
+
+async function connectionLost(error) {
+  if (!port) return;
+  setStatus("Badge disconnected — ready for the next one", "",
+    error && error.message
+      ? `${error.message}. Reconnect the cable, then press Connect badge.`
+      : "Reconnect the cable, then press Connect badge.");
+  setBusy(false);
+  await cleanup();
+}
+
+async function disconnect() {
+  await cleanup();
+  setStatus("Disconnected — ready to reconnect", "",
+    "Press Connect badge when this badge or the next one is powered and plugged in.");
+}
+
+// ---------------------------------------------------------------- form
+
+// Four short, familiar, dash-separated words. This prototype draws from 256
+// words (32 random bits) and checks the browser's local provisioning log for a
+// collision. The production tool should still enforce uniqueness centrally.
+const BADGE_ID_WORDS = [
+  "acorn", "alpaca", "anchor", "apple", "arrow", "badger", "bamboo", "beacon",
+  "bear", "birch", "bison", "blossom", "bluejay", "brook", "cactus", "cedar",
+  "cherry", "cloud", "comet", "coral", "crane", "cricket", "crown", "daisy",
+  "dawn", "deer", "dolphin", "dove", "dragon", "eagle", "ember", "falcon",
+  "fern", "finch", "firefly", "forest", "fox", "frost", "garden", "gecko",
+  "glade", "goose", "grove", "harbor", "hawk", "hazel", "heron", "hill",
+  "honey", "ibis", "island", "ivy", "jade", "jay", "koala", "lake",
+  "lantern", "lark", "leaf", "lemur", "lilac", "lion", "lotus", "lynx",
+  "maple", "marlin", "meadow", "meteor", "mink", "moon", "moose", "moss",
+  "nebula", "newt", "oak", "ocean", "olive", "orchid", "otter", "owl",
+  "panda", "pearl", "penguin", "petal", "pine", "poppy", "puffin", "quartz",
+  "rabbit", "raven", "reef", "river", "robin", "rocket", "rose", "sage",
+  "seal", "shark", "shell", "sparrow", "spruce", "star", "stone", "storm",
+  "sun", "swan", "swift", "thistle", "thunder", "tiger", "toucan", "trout",
+  "tulip", "turtle", "valley", "velvet", "violet", "whale", "willow", "wolf",
+  "wren", "yarrow", "zebra", "zenith", "zephyr", "summit", "ripple", "canyon",
+  "agile", "air", "almond", "antler", "aspen", "atlas", "aurora", "autumn",
+  "bay", "beach", "berry", "bloom", "breeze", "brick", "bronze", "bubble",
+  "cabin", "camel", "candle", "candy", "castle", "cave", "clover", "cocoa",
+  "coffee", "copper", "creek", "delta", "dream", "dune", "dusk", "echo",
+  "elm", "fable", "feather", "field", "flame", "flint", "flower", "flute",
+  "gem", "ginger", "glacier", "glow", "grape", "grass", "gull", "hickory",
+  "horizon", "horse", "juniper", "kite", "kiwi", "lagoon", "lemon", "light",
+  "lime", "magpie", "mango", "marble", "melon", "mist", "morning", "moth",
+  "nectar", "night", "north", "oasis", "opal", "orbit", "palm", "pebble",
+  "pepper", "phoenix", "planet", "plum", "prism", "rain", "reed", "ruby",
+  "salmon", "sand", "satin", "scarlet", "seed", "shadow", "sky", "snow",
+  "sonnet", "south", "sunset", "thorn", "tide", "topaz", "trail", "wave",
+  "west", "wheat", "wind", "wing", "winter", "wood", "amber", "aqua",
+  "azure", "blue", "bold", "brave", "bright", "calm", "cosmic", "crisp",
+  "eager", "gentle", "golden", "happy", "hazy", "indigo", "jolly", "lucky",
+  "lunar", "mellow", "mint", "noble", "peach", "quiet", "rapid", "vivid",
+];
+
+function randomBadgeId() {
+  const used = new Set(loadLog().map((row) => row.badge_id));
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const b = new Uint8Array(4);
+    crypto.getRandomValues(b);
+    const id = [...b].map((index) => BADGE_ID_WORDS[index]).join("-");
+    if (!used.has(id)) return id;
+  }
+  throw new Error("could not generate a unique badge ID");
+}
+
+// Latin-1 printable only. The badge's fonts cover ASCII plus the Latin-1
+// supplement; anything else renders blank on the ID page.
+const LATIN1 = /^[\x20-\x7E\xA0-\xFF]*$/;
+
+function validate(data) {
+  const errs = {};
+  for (const [k, max] of Object.entries(LIMITS)) {
+    const v = data[k] || "";
+    if (v.length > max) errs[k] = `too long (${v.length}/${max})`;
+    else if (!LATIN1.test(v)) errs[k] = "unsupported characters";
+  }
+  if (!data.display_name) errs.display_name = "required";
+  else if (data.display_name.trim().split(/\s+/).length < 2)
+    errs.display_name = "needs a first and last name";
+  if (!data.account_email) errs.account_email = "required";
+  if (!/^\d+$/.test(data.attendee_id || "")) errs.attendee_id = "digits only";
+  if (data.claim_id && !/^\d+$/.test(data.claim_id)) errs.claim_id = "digits only";
+  if (!data.badge_id) errs.badge_id = "required";
+  if (!Object.hasOwn(APP_MODE_LABELS, data.app_mode)) errs.app_mode = "choose an app mode";
+  return errs;
+}
+
+function showErrors(errs) {
+  for (const el of els.form.querySelectorAll("input,select")) {
+    const slot = el.parentElement.querySelector(".err");
+    const msg = errs[el.name];
+    if (slot) slot.textContent = msg || "";
+    el.classList.toggle("bad", !!msg);
+  }
+}
+
+function formData() {
+  const d = {};
+  for (const el of els.form.querySelectorAll("input,select")) d[el.name] = el.value.trim();
+  return d;
+}
+
+function parseKeyValueReply(reply) {
+  const values = {};
+  for (const rawLine of reply.replace(/\r/g, "").split("\n")) {
+    const line = rawLine.trim();
+    const match = line.match(/^([a-z_]+)=(.*)$/);
+    if (match) values[match[1]] = match[2];
+  }
+  return values;
+}
+
+async function recoverConnection(tryUnwedge) {
+  if (!port) return false;
+  if (await sync(1)) return true;
+  if (tryUnwedge) {
+    try { await unwedge(); } catch (_) {}
+    if (port && await sync(2)) return true;
+  }
+  await cleanup();
+  return false;
+}
+
+async function readBadgeData() {
+  setBusy(true);
+  setStatus("Reading badge data…", "busy");
+  try {
+    if (!(await sync(2))) throw new Error("badge did not respond");
+    const reply = await ask("prov show", 8000);
+    if (/Unrecognized command/.test(reply)) {
+      throw new Error("this badge's firmware cannot read provisioning data — flash the current build first");
+    }
+
+    const values = parseKeyValueReply(reply);
+    const mac = values.mac || "unknown";
+    const modeReply = await ask("appmode", 5000);
+    const modeMatch = modeReply.match(/\bAPP MODE (default|public|all)\b/);
+    const modeSupported = !/Unrecognized command/.test(modeReply) && !!modeMatch;
+    if (modeSupported) els.form.app_mode.value = modeMatch[1];
+    if (values.provisioned !== "1") {
+      setStatus("Badge has no provisioned identity", "",
+        `MAC ${mac}. ${modeSupported ? `Apps: ${APP_MODE_LABELS[modeMatch[1]]}. ` : ""}` +
+        "The identity fields were left unchanged so you can program it now.");
+      return;
+    }
+
+    const fields = [
+      "badge_id", "attendee_id", "display_name", "account_email", "claim_id",
+      "net_email", "net_phone", "net_linkedin", "net_discord", "net_instagram", "net_x",
+    ];
+    for (const name of fields) {
+      const control = els.form.elements.namedItem(name);
+      if (control) control.value = values[name] || "";
+    }
+    // Firmware reports human-readable names (for example "Workshop Lead");
+    // registration uses the canonical lowercase keys from the lanyard table.
+    const role = (values.role || "").trim().toLowerCase()
+      .replace(/[\s/-]+/g, "_");
+    if ([...els.form.role.options].some((option) => option.value === role)) {
+      els.form.role.value = role;
+    }
+    showErrors(validate(formData()));
+    setStatus(`Loaded ${values.display_name} from badge`, "ok",
+      `Badge ID ${values.badge_id} — MAC ${mac}. ` +
+      (modeSupported
+        ? `Apps: ${APP_MODE_LABELS[modeMatch[1]]}. Review before programming any changes.`
+        : "This firmware cannot report its app mode; choose one before reprogramming."));
+  } catch (e) {
+    const message = String(e.message || e);
+    const recovered = await recoverConnection(false);
+    setStatus(recovered ? "Read failed — connection recovered" : "Connection lost — ready to reconnect",
+      "bad", recovered ? `${message}. You can retry now.`
+                        : `${message}. Check the cable, then press Connect badge.`);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function factoryResetBadge() {
+  const confirmed = confirm(
+    "Factory-reset this badge?\n\n" +
+    "This erases its provisioned identity, contacts, settings, and installed Lua apps, then reboots. " +
+    "The firmware preserves its Solana wallet key. This cannot be undone."
+  );
+  if (!confirmed) return;
+
+  let identityErased = false;
+  setBusy(true);
+  setStatus("Factory-resetting badge…", "busy", "Keep the cable connected until reset is confirmed.");
+  try {
+    if (!(await sync(2))) throw new Error("badge did not respond");
+
+    const eraseReply = await ask("prov erase confirm", 8000);
+    if (/Unrecognized command/.test(eraseReply)) {
+      throw new Error("this badge's firmware has no provisioning erase command");
+    }
+    if (!/PROV ERASED/.test(eraseReply)) {
+      throw new Error(`identity erase was not confirmed — ${summarize(eraseReply)}`);
+    }
+    identityErased = true;
+
+    rx = "";
+    await sendLine("factory_reset confirm");
+    let resetReply;
+    try {
+      resetReply = await waitFor("rebooting...", 8000);
+    } catch (e) {
+      // USB may disappear as soon as esp_restart() runs. If its complete reset
+      // receipt reached us first, that disconnect is the expected success path.
+      if (/factory_reset: [^\r\n]*rebooting\.\.\./.test(rx)) resetReply = rx;
+      else throw e;
+    }
+    if (/partial/.test(resetReply)) {
+      throw new Error("the firmware reported that only part of config/apps was cleared");
+    }
+    if (!/factory_reset: cleared/.test(resetReply)) {
+      throw new Error(`factory reset was not confirmed — ${summarize(resetReply)}`);
+    }
+
+    await cleanup();
+    resetForm();
+    setStatus("Badge factory-reset complete", "ok",
+      "Identity, contacts, settings, and installed apps were cleared. It is safe to unplug.");
+  } catch (e) {
+    const message = String(e.message || e);
+    const recovered = await recoverConnection(false);
+    const partial = identityErased ? " Identity was erased, but the rest of the reset may be incomplete." : "";
+    const punctuation = /[.!?]$/.test(message) ? "" : ".";
+    setStatus(recovered ? "Reset incomplete — connection recovered" : "Reset incomplete — reconnect to verify",
+      "bad", `${message}${punctuation}${partial} ${recovered ? "You can retry now." : "Reconnect and use Read badge data to verify."}`);
+  } finally {
+    setBusy(false);
+  }
+}
+
+// ---------------------------------------------------------------- provision
+
+async function provision(ev) {
+  ev.preventDefault();
+  const data = formData();
+  const errs = validate(data);
+  showErrors(errs);
+  if (Object.keys(errs).length) {
+    setStatus("Fix the highlighted fields", "bad");
+    return;
+  }
+
+  const password = els.adminPassword.value.trim();
+  if (!/^[A-Za-z0-9_-]{12,96}$/.test(password)) {
+    setStatus("Enter the Admin password", "bad", "Use the generated Admin password before programming.");
+    els.adminPassword.focus();
+    return;
+  }
+  let identityProgrammed = false;
+  setBusy(true);
+  setStatus("Checking Admin password…", "busy");
+
+  try {
+    const identity = {
+      version: 1,
+      badge_id: data.badge_id,
+      attendee_id: Number(data.attendee_id),
+      role: data.role,
+      display_name: data.display_name,
+      account_email: data.account_email,
+      provisioned_unix: Math.floor(Date.now() / 1000),
+    };
+    // Omit empty optional fields rather than sending "". The firmware treats
+    // absent and empty identically, and every byte saved is one less to push
+    // through a 256-byte serial buffer.
+    for (const k of ["claim_id", "net_email", "net_phone", "net_linkedin",
+                     "net_discord", "net_instagram", "net_x"]) {
+      if (data[k]) identity[k] = data[k];
+    }
+    const jsonText = JSON.stringify(identity);
+    const bytes = new TextEncoder().encode(jsonText);
+
+    // Re-sync before every badge. The operator may have unplugged the last one
+    // mid-command; if that left a `put` open, unwedge it before trying again,
+    // or our command line becomes the next badge's file contents.
+    if (!(await sync(2))) {
+      await unwedge();
+      if (!(await sync(2))) throw new Error("badge stopped responding — reconnect");
+    }
+
+    const authReply = await askAdmin("check", password);
+    if (/Unrecognized command/.test(authReply)) {
+      throw new Error("this firmware has no 'appmode' command — flash the current engineer firmware before programming");
+    }
+    if (/ADMIN AUTH FAIL/.test(authReply)) throw new Error("Admin password was rejected; identity was not changed");
+    if (!/ADMIN AUTH OK/.test(authReply)) {
+      throw new Error("firmware does not support Admin password checks — flash the current engineer firmware before programming");
+    }
+    setStatus("Programming…", "busy");
+
+    // Written straight to its final path — no staging file. A failure between
+    // the put and the apply leaves the badge unprovisioned, which the firmware
+    // reports plainly, rather than half-loaded.
+    await sendLine(`put ${IDENTITY_PATH} ${bytes.length}`);
+    try {
+      await waitFor("READY", 5000);
+    } catch (_) {
+      // `put` refused before it ever opened the file: bad size, bad path, or
+      // a firmware too old to have the command.
+      throw new Error(`badge did not accept the upload — ${tail(3)}`);
+    }
+    await writeBytes(bytes);
+    try {
+      await waitFor("OK " + bytes.length, 8000);
+    } catch (_) {
+      throw new Error(`upload did not complete — ${tail(3)}`);
+    }
+
+    // Consume the prompt that follows `put` before issuing the next command.
+    // Leaving it in the buffer would make the wait below return instantly on
+    // the *old* prompt, before `prov apply` had produced any output.
+    await waitFor("badge> ", 5000).catch(() => {});
+
+    // Read it back and compare. "OK <size>" only proves the badge counted the
+    // right number of bytes, not that they were OUR bytes — a wedged transfer
+    // will happily make up the difference from whatever we send next. This is
+    // the only check that actually proves the file on the badge is correct.
+    let back;
+    try {
+      back = await ask(`cat ${IDENTITY_PATH}`, 8000);
+    } catch (_) {
+      throw new Error(`could not read identity.json back — ${tail(3)}`);
+    }
+    const a = back.indexOf("{"), b = back.lastIndexOf("}");
+    const onBadge = (a >= 0 && b > a) ? back.slice(a, b + 1) : "";
+    if (onBadge !== jsonText) {
+      throw new Error(onBadge
+        ? `identity.json on the badge does not match what was sent ` +
+          `(${onBadge.length} of ${jsonText.length} bytes) — not programmed`
+        : `could not read identity.json back — ${summarize(back)}`);
+    }
+
+    let all;
+    try {
+      all = await ask("prov apply", 8000);
+    } catch (_) {
+      throw new Error(`no reply to 'prov apply' — ${tail(3)}`);
+    }
+
+    if (/PROV FAIL/.test(all)) {
+      const why = (all.match(/PROV FAIL ([^\r\n]*)/) || [, "unknown"])[1];
+      setStatus("FAILED — do not hand out this badge", "bad", why);
+      return;
+    }
+    // esp_console prints this for a command it doesn't have registered.
+    if (/Unrecognized command/.test(all)) {
+      throw new Error("this badge's firmware has no 'prov' command — " +
+                      "flash the current build and try again");
+    }
+    if (!/PROV OK/.test(all)) {
+      throw new Error(`unexpected reply to 'prov apply' — ${summarize(all)}`);
+    }
+    identityProgrammed = true;
+    const mac = (all.match(/mac=([0-9a-f:]{17})/i) || [, "unknown"])[1];
+
+    let modeReply;
+    try {
+      modeReply = await askAdmin(data.app_mode, password);
+    } catch (_) {
+      throw new Error(`identity was programmed, but app mode was not confirmed — ${tail(3)}`);
+    }
+    if (/Unrecognized command/.test(modeReply)) {
+      throw new Error("identity was programmed, but this firmware has no 'appmode' command — " +
+                      "flash the current build and retry before handing out the badge");
+    }
+    if (!new RegExp(`\\bAPP MODE OK ${data.app_mode}\\b`).test(modeReply)) {
+      throw new Error(`identity was programmed, but app mode was not confirmed — ${summarize(modeReply)}`);
+    }
+
+    record({
+      time: new Date().toLocaleTimeString(),
+      name: data.display_name,
+      role: data.role,
+      app_mode: data.app_mode,
+      badge_id: data.badge_id,
+      mac,
+    });
+
+    setStatus(`✓ ${data.display_name} — ${data.role}`, "ok",
+              `${APP_MODE_LABELS[data.app_mode]} — MAC ${mac} — unplug and hand over with batteries.`);
+    resetForm();
+  } catch (e) {
+    const message = String(e.message || e).split(password).join("[hidden]");
+    const recovered = await recoverConnection(true);
+    setStatus(identityProgrammed ? "Identity programmed — app mode still needs attention"
+      : recovered ? "FAILED — connection recovered; ready to retry"
+                  : "FAILED — reconnect before retrying",
+      "bad", recovered ? message : `${message}. Check the cable, then press Connect badge.`);
+  } finally {
+    sensitiveReply = false;
+    setBusy(false);
+  }
+}
+
+// ---------------------------------------------------------------- log
+
+function loadLog() { try { return JSON.parse(localStorage.getItem(LOG_KEY)) || []; } catch { return []; } }
+function saveLog(rows) { localStorage.setItem(LOG_KEY, JSON.stringify(rows)); }
+
+function renderLog() {
+  const rows = loadLog();
+  els.rows.innerHTML = "";
+  for (const r of rows.slice().reverse()) {
+    const tr = document.createElement("tr");
+    for (const [v, mono] of [[r.time, 0], [r.name, 0], [r.role, 0],
+                             [APP_MODE_LABELS[r.app_mode] || "Legacy", 0],
+                             [r.badge_id, 1], [r.mac, 1]]) {
+      const td = document.createElement("td");
+      td.textContent = v;
+      if (mono) td.className = "mono";
+      tr.append(td);
+    }
+    els.rows.append(tr);
+  }
+  els.count.textContent = rows.length;
+  els.csv.disabled = rows.length === 0;
+}
+
+function record(entry) {
+  const rows = loadLog();
+  rows.push(entry);
+  saveLog(rows);
+  renderLog();
+}
+
+function downloadCsv() {
+  const rows = loadLog();
+  const esc = (s) => `"${String(s).replace(/"/g, '""')}"`;
+  const csv = ["time,name,role,app_mode,badge_id,ble_mac",
+    ...rows.map((r) => [r.time, r.name, r.role, r.app_mode || "legacy", r.badge_id, r.mac]
+      .map(esc).join(","))].join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = `badge-provision-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function resetForm() {
+  els.form.reset();
+  els.form.badge_id.value = randomBadgeId();
+  showErrors({});
+  els.form.display_name.focus();
+}
+
+// ---------------------------------------------------------------- wiring
+
+els.connect.addEventListener("click", connect);
+els.disconnect.addEventListener("click", disconnect);
+els.form.addEventListener("submit", provision);
+els.read.addEventListener("click", readBadgeData);
+els.factoryReset.addEventListener("click", factoryResetBadge);
+$("#clear").addEventListener("click", resetForm);
+$("#empty").addEventListener("click", () => {
+  for (const el of els.form.querySelectorAll("input")) el.value = "";
+  els.form.badge_id.value = randomBadgeId();
+  showErrors({});
+  els.form.display_name.focus();
+});
+$("#csv").addEventListener("click", downloadCsv);
+$("#wipe").addEventListener("click", () => {
+  if (confirm("Clear the local record of programmed badges?")) { saveLog([]); renderLog(); }
+});
+window.addEventListener("beforeunload", (e) => {
+  if (port) { e.preventDefault(); e.returnValue = ""; }
+});
+if ("serial" in navigator) {
+  navigator.serial.addEventListener("disconnect", (event) => {
+    // Current Web Serial dispatches at the SerialPort (event.target); keep the
+    // legacy event.port fallback for older Chromium builds.
+    const disconnectedPort = event.port || event.target;
+    if (disconnectedPort === port) void connectionLost(new Error("USB connection closed"));
+  });
+}
+
+resetForm();
+renderLog();
+updateControls();
+</script>
+</body>
+</html>

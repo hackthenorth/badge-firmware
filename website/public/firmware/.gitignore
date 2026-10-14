@@ -1,0 +1,6 @@
+# The /sync firmware section serves these committed official badge binaries,
+# so re-include them despite the repo-root `*.bin` ignore (.gitignore line
+# 39). Only these three names are tracked; anything else stays ignored.
+!bootloader.bin
+!partition-table.bin
+!firmware.bin

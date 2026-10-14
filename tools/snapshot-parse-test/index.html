@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Snapshot Parse Test (site-logic replica)</title>
+<style>
+  :root {
+    --bg:#0a0e1a; --panel:#0f1422; --border:#2d4a6b; --accent:#00d9ff;
+    --text:#e0e8f0; --dim:#6a7a9a; --ok:#36e07a; --bad:#ff5c8a; --warn:#ffd166;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:24px; background:var(--bg); color:var(--text);
+    font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  .wrap { max-width:960px; margin:0 auto; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--dim); margin:0 0 20px; }
+  .mono { font-family:ui-monospace,Menlo,monospace; }
+  .panel {
+    background:var(--panel); border:1px solid var(--border);
+    border-radius:10px; padding:18px; margin-bottom:16px;
+  }
+  .bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  button {
+    min-width:160px; min-height:44px; padding:10px 12px;
+    border-radius:8px; border:1px solid var(--border);
+    background:#16203a; color:var(--text); font:inherit; font-weight:600; cursor:pointer;
+  }
+  button:hover:not(:disabled) { border-color:var(--accent); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  button.primary { background:var(--accent); color:#04121a; border-color:var(--accent); }
+  #status { padding:14px 16px; border-radius:10px; font-size:16px; font-weight:600;
+    margin-bottom:16px; border:1px solid var(--border); background:var(--panel); }
+  #status.ok   { background:#0d2a1a; border-color:var(--ok);   color:var(--ok); }
+  #status.bad  { background:#2a0d18; border-color:var(--bad);  color:var(--bad); }
+  #status.busy { background:#2a2410; border-color:var(--warn); color:var(--warn); }
+  #status small { display:block; font-weight:400; font-size:14px; color:var(--text);
+    margin-top:6px; opacity:.85; }
+  #out {
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px;
+    white-space:pre-wrap; word-break:break-word;
+    max-height:60vh; overflow:auto; background:#060911;
+    padding:12px; border-radius:6px; margin-top:12px; color:#a9bcd8;
+  }
+  .hint { font-size:13px; color:var(--dim); }
+  #log { font-family:ui-monospace,monospace; font-size:11px; white-space:pre-wrap;
+    max-height:160px; overflow:auto; background:#060911; padding:10px;
+    border-radius:6px; margin-top:10px; color:#7c8db0; }
+  details summary { cursor:pointer; color:var(--dim); font-size:14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Snapshot Parse Test</h1>
+<p class="sub">Replicates the sync page's <span class="mono">readUpload()</span> capture
+logic from <span class="mono">my.hackthenorth.com</span>
+(<span class="mono">badgeProvisioner.ts</span>) in isolation, with the structure
+diagnostics the site omits. No uploads leave the browser.</p>
+
+<div id="status">Not connected<small>Connect a powered badge to begin.</small></div>
+
+<div class="panel">
+  <div class="bar">
+    <button id="connect" class="primary">Connect badge</button>
+    <button id="run" disabled>Run site logic</button>
+    <button id="disconnect" disabled>Disconnect</button>
+  </div>
+  <p class="hint">
+    Web Serial (desktop Chrome/Edge over HTTPS or
+    <span class="mono">localhost</span>). Runs the sync-button handler verbatim:
+    <span class="mono">reboot</span>, then <span class="mono">prov show</span> /
+    <span class="mono">appmode</span> / <span class="mono">badge_token get</span>,
+    then <span class="mono">snapshot</span> (30 s), with the site's exact
+    find-first-<span class="mono">{</span>-line + <span class="mono">JSON.parse</span> +
+    token/size checks. Admin path (no ownership check); stops before the upload
+    POST.
+  </p>
+</div>
+
+<div class="panel">
+  <div id="summary" class="hint">No run yet.</div>
+  <div id="out">(structure map appears here)</div>
+</div>
+
+<details class="panel">
+  <summary>Serial log (allowlisted lines only, like the site)</summary>
+  <div id="log"></div>
+</details>
+
+</div>
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Faithful copy of the site's readUpload() capture logic.
+// Source: my.hackthenorth.com
+//   src/views/volunteer/registration/badge-registration/badgeProvisioner.ts
+// Differences from the site are marked DIAG (diagnostics the site lacks).
+// ---------------------------------------------------------------------------
+const BAUD = 115200;
+const PROMPT = "badge> ";
+
+// Site: only complete, known diagnostic lines may reach the console.
+const SYNC_DIAGNOSTIC_LINES = [
+  /^no room for a snapshot: largest block \d+, free \d+, need \d+$/,
+  /^# heap tight: cap \d+ not \d+ \(largest \d+, free \d+\)$/,
+  /^snapshot failed \(out of memory\)$/,
+  /^bytes=\d+ crc32=[0-9a-f]{8} complete=(yes|no) elapsed_ms=\d+$/,
+  /^seen=\d+ text=\d+ binary=\d+ too_big=\d+ dropped=\d+ unreadable=\d+ truncated=\d+ path_skipped=\d+$/,
+  /^provisioned=[01]$/,
+  /^APP MODE (?:OK )?(default|public|all)$/,
+  /^BADGE_TOKEN (MISSING|READY|OK|FAIL)$/,
+  /^BADGE_PROFILE (READY|OK|FAIL)$/,
+  /^Unrecognized command$/,
+  /^Command returned non-zero error code: 0x[0-9a-f]+ \([A-Z_]+\)$/,
+];
+
+// Site: exact find used on the snapshot reply.
+function siteFindJsonLine(reply) {
+  return reply.replace(/\r/g, "").split("\n")
+    .find((value) => value.trim().startsWith("{"));
+}
+
+// Site: exact safety/size gate (rawToken = 64-hex sync credential).
+function siteCheckSafety(json, rawToken) {
+  const bytes = new TextEncoder().encode(json).length;
+  if (json.includes(rawToken) || bytes > 65536)
+    throw new Error("Unsafe or oversized snapshot");
+  return bytes;
+}
+
+// Site: BadgeOperationError + parseKeyValueReply, verbatim.
+class BadgeOperationError extends Error {
+  constructor(message, connectionRecovered) {
+    super(message);
+    this.name = "BadgeOperationError";
+    this.connectionRecovered = connectionRecovered;
+  }
+}
+class BadgeOwnershipError extends Error {
+  constructor() {
+    super("This badge is not yours! Check that you connected your own badge. " +
+      "If this is your badge, bring it to the Badge Help Desk so we can fix its registration.");
+    this.name = "BadgeOwnershipError";
+  }
+}
+function parseKeyValueReply(reply) {
+  const values = {};
+  reply.replace(/\r/g, "").split("\n").forEach((rawLine) => {
+    const match = rawLine.trim().match(/^([a-z_]+)=(.*)$/);
+    if (match) values[match[1]] = match[2];
+  });
+  return values;
+}
+
+// Site: inspect(), verbatim (method lifted to a function).
+async function inspect() {
+  try {
+    if (!(await sync(2))) throw new Error("Badge did not respond");
+    const reply = await ask("prov show", 8000);
+    if (/Unrecognized command/.test(reply)) {
+      throw new Error(
+        "This badge firmware cannot read provisioning data; flash the current build first");
+    }
+    const values = parseKeyValueReply(reply);
+    if (!["0", "1"].includes(values.provisioned))
+      throw new Error("The badge did not report its registration state");
+    const modeReply = await ask("appmode", 5000);
+    const modeMatch = modeReply.match(/\bAPP MODE (default|public|all)\b/);
+    return {
+      provisioned: values.provisioned === "1",
+      mac: values.mac || "unknown",
+      appMode: modeMatch && modeMatch[1],
+      identity: values.provisioned === "1" ? {
+        badge_id: values.badge_id,
+        attendee_id: Number(values.attendee_id),
+        role: values.role,
+        display_name: values.display_name,
+        account_email: values.account_email,
+        provisioned_unix: Number(values.provisioned_unix || 0),
+        claim_id: values.claim_id,
+        net_email: values.net_email,
+        net_phone: values.net_phone,
+        net_linkedin: values.net_linkedin,
+        net_discord: values.net_discord,
+        net_instagram: values.net_instagram,
+        net_x: values.net_x,
+      } : undefined,
+    };
+  } catch (error) {
+    const recovered = await recoverConnection();
+    throw new BadgeOperationError(
+      error instanceof Error ? error.message : String(error), recovered);
+  }
+}
+
+// Site: recoverConnection(false) as used by inspect(), verbatim.
+async function recoverConnection() {
+  if (!port) return false;
+  if (await sync(1)) return true;
+  await cleanup();
+  return false;
+}
+
+// Site: readSyncCredentials(), verbatim (expectedClaimId undefined = admin path;
+// the personal page passes the signed-in user's claim id instead).
+async function readSyncCredentials(expectedClaimId) {
+  rx = "";
+  try {
+    const inspection = await inspect();
+    const claimId = Number(inspection.identity && inspection.identity.claim_id);
+    if (!inspection.provisioned || !Number.isSafeInteger(claimId) || claimId <= 0)
+      throw new Error("Missing badge identity");
+    if (expectedClaimId !== undefined && claimId !== expectedClaimId)
+      throw new BadgeOwnershipError();
+    const reply = await ask("badge_token get", 5000);
+    const rawToken = (reply.match(/(?:^|\n)BADGE_TOKEN ([0-9a-f]{64})(?:\r?\n)/) || [])[1];
+    if (!rawToken) throw new Error("Missing badge token");
+    return {
+      claimId,
+      badgeId: (inspection.identity && inspection.identity.badge_id) || "",
+      displayName: (inspection.identity && inspection.identity.display_name) || "Unknown attendee",
+      rawToken,
+    };
+  } catch (error) {
+    if (error instanceof BadgeOwnershipError) throw error;
+    throw new Error(
+      "Could not read badge credentials. Reconnect and check that registration and firmware are up to date.");
+  } finally {
+    rx = "";
+  }
+}
+
+// Site: rebootForSync(), verbatim.
+const REBOOT_TIMEOUT_MS = 15000;
+async function rebootForSync() {
+  rx = "";
+  try {
+    diag("Restarting badge before sync.\n");
+    await sendLine("reboot");
+    await waitFor("rebooting...", 3000);
+    await waitFor(PROMPT, REBOOT_TIMEOUT_MS);
+    diag("Badge restarted and is ready to sync.\n");
+  } catch (_) {
+    throw new Error(
+      "The badge did not come back after restarting. Unplug it, reconnect, and try again.");
+  } finally {
+    rx = "";
+  }
+}
+
+// DIAG: last seen credential + stage, so a failure can be decomposed without
+// logging private content. Lengths/counts/booleans only.
+let lastToken = "";
+let lastStage = "";
+
+// Site: BLE staging key (firmware kFsSnapshotTmpPath, mirrored root-relative).
+const SYNC_STAGING_KEY = ".sync_snapshot.json";
+
+// Site: readUpload(), verbatim (sans class). Throws BadgeOwnershipError through.
+async function readUpload(expectedClaimId, onReply) {
+  let stage = "reading sync credentials";
+  const setStage = (s) => { stage = s; lastStage = s; };
+  try {
+    const credentials = await readSyncCredentials(expectedClaimId);
+    lastToken = credentials.rawToken;
+    setStage("reading the snapshot");
+    const reply = await ask("snapshot", 30000);
+    onReply && onReply(reply);
+    setStage("parsing the snapshot JSON");
+    const line = siteFindJsonLine(reply);
+    const snapshot = JSON.parse(line || "");
+    if (!snapshot || Array.isArray(snapshot) || typeof snapshot !== "object")
+      throw new Error("Invalid snapshot");
+    // Site: exclude a stale BLE staging file (transport header carries the
+    // raw credential) before the safety check and upload.
+    let excludedStaging = false;
+    const stagedFiles = snapshot.files;
+    if (stagedFiles && typeof stagedFiles === "object" && !Array.isArray(stagedFiles)) {
+      const stagingKey = Object.keys(stagedFiles).find(
+        (path) => path.replace(/^\/littlefs\//, "") === SYNC_STAGING_KEY
+      );
+      if (stagingKey !== undefined) {
+        delete stagedFiles[stagingKey];
+        excludedStaging = true;
+        diag("Excluded stale sync staging file from the upload.\n");
+      }
+    }
+    const json = JSON.stringify(snapshot);
+    const bytes = new TextEncoder().encode(json).length;
+    setStage("checking snapshot safety and size");
+    if (json.includes(credentials.rawToken) || bytes > 65536)
+      throw new Error("Unsafe or oversized snapshot");
+    diag("Snapshot validated (" + bytes + " bytes).\n");
+    setStage("done");
+    return { credentials, snapshot, json, bytes, reply, excludedStaging };
+  } catch (error) {
+    diag("Sync failed while " + stage + ".\n");
+    if (error instanceof BadgeOwnershipError) throw error;
+    throw siteError();
+  } finally {
+    rx = "";
+  }
+}
+
+// DIAG: decompose the collapsed site error using only safe metadata.
+function decomposeFailure(reply) {
+  const out = ["failed-stage=" + lastStage];
+  const line = siteFindJsonLine(reply);
+  if (line === undefined) {
+    out.push("brace-lines=0 (no JSON line at all)");
+    return out;
+  }
+  let parsed = false, len = -1, crc = "n/a";
+  try {
+    JSON.parse(line);
+    parsed = true;
+    len = new TextEncoder().encode(line).length;
+    crc = crc32(new TextEncoder().encode(line)).toString(16).padStart(8, "0");
+  } catch (_) { len = line.length; }
+  const t = parseTrailer(reply);
+  out.push("brace-line parses standalone=" + parsed);
+  out.push("brace-line bytes=" + len +
+    (t ? " vs trailer bytes=" + t.bytes + " (" + (len === t.bytes ? "MATCH" : "DIFFER") + ")" : " (no trailer)"));
+  out.push("brace-line crc32=" + crc +
+    (t ? " vs trailer crc32=" + t.crc + " (" + (crc === t.crc ? "MATCH" : "DIFFER") + ")" : " (no trailer)"));
+  if (parsed && lastToken) {
+    const hasToken = line.includes(lastToken);
+    out.push("contains sync credential=" + hasToken + (hasToken ? " (safety trip)" : ""));
+    out.push("over 65536 bytes=" + (len > 65536));
+  }
+  return out;
+}
+
+// Site: exact user-facing error.
+function siteError() {
+  return new Error(
+    "Could not read a safe snapshot. Reconnect the badge and check that " +
+    "registration and firmware are up to date.");
+}
+
+// --- DIAG: helpers the site lacks (lengths/counts only, no file contents) ---
+
+// Standard CRC-32 (zlib), matching esp_rom_crc32_le(0, json, bytes).
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++)
+    c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function parseTrailer(reply) {
+  const m = reply.match(/bytes=(\d+) crc32=([0-9a-f]{8}) complete=(yes|no)/);
+  return m ? { bytes: Number(m[1]), crc: m[2], complete: m[3] } : null;
+}
+// One row per physical line: index, length, tag. No contents logged.
+function structureMap(reply) {
+  return reply.replace(/\r/g, "").split("\n").map((l, i) => {
+    const s = l.trim();
+    const tag = !s ? "empty"
+      : s.startsWith("{") ? "JSON"
+      : /^(bytes|seen)=/.test(s) ? "trailer"
+      : SYNC_DIAGNOSTIC_LINES.some((p) => p.test(s)) ? "diag"
+      : "OTHER";
+    return { i, len: l.length, tag };
+  });
+}
+
+// --- serial (same wire rules as the site and tools/sync-viewer) ---
+let port = null, writer = null, reader = null, rx = "", readLoopPromise = null;
+let operationBusy = false;
+let diagLine = "", diagLineTooLong = false;
+
+const $ = (s) => document.querySelector(s);
+const els = {
+  status: $("#status"), connect: $("#connect"), run: $("#run"),
+  disconnect: $("#disconnect"), summary: $("#summary"),
+  out: $("#out"), log: $("#log"),
+};
+
+function updateControls() {
+  const connected = !!(port && writer);
+  els.connect.disabled = connected || operationBusy;
+  els.run.disabled = !connected || operationBusy;
+  els.disconnect.disabled = !connected || operationBusy;
+}
+function setBusy(b) { operationBusy = b; updateControls(); }
+function setStatus(msg, cls, detail) {
+  els.status.className = cls || "";
+  els.status.innerHTML = "";
+  els.status.append(msg);
+  if (detail) {
+    const s = document.createElement("small");
+    s.textContent = detail;
+    els.status.append(s);
+  }
+}
+function diag(s) {
+  els.log.textContent += s;
+  els.log.scrollTop = els.log.scrollHeight;
+}
+// Site's logSyncDiagnostics: USB reads split lines arbitrarily; never retain
+// a large snapshot line, discard its remainder through the next LF.
+function logSyncDiagnostics(text) {
+  for (const part of text.split(/(\n)/)) {
+    if (part !== "\n") {
+      if (!diagLineTooLong) {
+        diagLine += part;
+        if (diagLine.length > 1024) { diagLine = ""; diagLineTooLong = true; }
+      }
+      continue;
+    }
+    const line = diagLine.replace(/\r/g, "").trim();
+    if (!diagLineTooLong) {
+      if (/^BADGE_TOKEN [0-9a-f]{64}$/.test(line)) diag("BADGE_TOKEN [present; hidden]\n");
+      else if (SYNC_DIAGNOSTIC_LINES.some((p) => p.test(line))) diag(line + "\n");
+    }
+    diagLine = ""; diagLineTooLong = false;
+  }
+}
+
+async function readLoop(activePort) {
+  const dec = new TextDecoder();
+  try {
+    while (port === activePort && activePort.readable) {
+      const streamReader = activePort.readable.getReader();
+      reader = streamReader;
+      try {
+        for (;;) {
+          const { value, done } = await streamReader.read();
+          if (done) break;
+          const text = dec.decode(value, { stream: true });
+          rx += text;
+          logSyncDiagnostics(text);
+          if (rx.length > 96 * 1024) throw new Error("Badge reply exceeded its limit");
+        }
+      } finally {
+        streamReader.releaseLock();
+        if (reader === streamReader) reader = null;
+      }
+      break;
+    }
+  } catch (e) {
+    if (port === activePort) void connectionLost(e);
+  }
+}
+// Bare CR only: console RX is ESP_LINE_ENDINGS_CR, so CRLF arrives doubled.
+async function sendLine(s) {
+  if (!writer) throw new Error("badge is not connected");
+  diag("> " + s + "\n");
+  await writer.write(new TextEncoder().encode(s + "\r"));
+}
+function waitFor(token, ms) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    (function poll() {
+      const i = rx.indexOf(token);
+      if (i >= 0) {
+        const got = rx.slice(0, i + token.length);
+        rx = rx.slice(i + token.length);
+        return resolve(got);
+      }
+      if (!port) return reject(new Error("badge disconnected"));
+      if (Date.now() - started > ms)
+        return reject(new Error("timed out waiting for " + JSON.stringify(token)));
+      setTimeout(poll, 20);
+    })();
+  });
+}
+async function ask(cmd, ms) {
+  rx = "";
+  await sendLine(cmd);
+  return await waitFor(PROMPT, ms);
+}
+async function sync(attempts) {
+  for (let i = 0; i < attempts; i++) {
+    rx = "";
+    try {
+      await writer.write(new Uint8Array([0x03]));
+      await sendLine("");
+      await waitFor(PROMPT, 1500);
+      return true;
+    } catch (_) { if (!port) break; }
+  }
+  return false;
+}
+async function cleanup() {
+  try { reader && await reader.cancel(); } catch (_) {}
+  try { await readLoopPromise; } catch (_) {}
+  try { writer && writer.releaseLock(); } catch (_) {}
+  writer = reader = readLoopPromise = null;
+  try { port && await port.close(); } catch (_) {}
+  port = null; rx = ""; diagLine = ""; diagLineTooLong = false;
+  updateControls();
+}
+async function connectionLost(e) {
+  await cleanup();
+  setStatus("Disconnected", "bad",
+    ((e && e.message) || "") + " Press Connect badge to reconnect.");
+}
+async function connect() {
+  if (!("serial" in navigator)) {
+    setStatus("Web Serial not supported", "bad", "Use desktop Chrome or Edge.");
+    return;
+  }
+  setBusy(true);
+  setStatus("Choose the badge's serial port…", "busy",
+    "Select USB JTAG/serial debug unit.");
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: BAUD, bufferSize: 4096 });
+    writer = port.writable.getWriter();
+    readLoopPromise = readLoop(port);
+    port.addEventListener("disconnect", () => {
+      if (port) void connectionLost(new Error("USB connection closed"));
+    }, { once: true });
+    setStatus("Checking badge…", "busy");
+    if (!(await sync(3))) {
+      await cleanup();
+      setStatus("No response — ready to reconnect", "bad",
+        "Port opened, but the console never answered.");
+      return;
+    }
+    setStatus("Connected — badge is responding", "ok",
+      "Press Run site logic.");
+  } catch (e) {
+    await cleanup();
+    const cancelled = e && e.name === "NotFoundError";
+    setStatus(cancelled ? "Connection cancelled" : "Connect failed", cancelled ? "" : "bad",
+      cancelled ? "No port selected." : String((e && e.message) || e));
+  } finally {
+    setBusy(false);
+  }
+}
+
+// --- the run: index.tsx sync-button handler, verbatim ---
+// Divergence from the site (isolation only): no signed-in user here, so the
+// admin path runs (readUpload(undefined), no ownership check), and the run
+// stops before save() — no POST to /v3/badge-data/upload, no applyProfile.
+async function runSiteLogic() {
+  setBusy(true);
+  setStatus("Restarting badge before sync… Keep it connected.", "busy");
+  els.summary.textContent = "Running…";
+  els.out.textContent = "";
+  let lastReply = "";
+  try {
+    await rebootForSync();
+    setStatus("Reading badge data… Keep the badge connected.", "busy");
+    const data = await readUpload(undefined, (reply) => { lastReply = reply; });
+    // Site (admin): preview ready. The personal page calls save(data) instead.
+    const rows = structureMap(lastReply).map((r) =>
+      "line " + r.i + ": len=" + r.len + " [" + r.tag + "]").join("\n");
+    els.out.textContent = rows;
+    const t = parseTrailer(lastReply);
+    const crc = crc32(new TextEncoder().encode(data.json)).toString(16).padStart(8, "0");
+    els.summary.textContent =
+      "SITE LOGIC: OK — " + data.credentials.displayName + " · " +
+      data.credentials.badgeId + " · Claim #" + data.credentials.claimId +
+      " — parsed " + data.bytes + " bytes, " +
+      Object.keys(data.snapshot.files || {}).length + " files, complete=" +
+      data.snapshot.complete + "." +
+      (data.excludedStaging ? " Stale sync staging file excluded." : "") +
+      (t ? " Trailer bytes=" + t.bytes + " crc32=" + t.crc +
+        (t.bytes === data.bytes && t.crc === crc ? " MATCH." : " MISMATCH (bytes or crc differ).")
+        : " No bytes=/crc32= trailer seen.") +
+      " Stops here; the site would now POST to /v3/badge-data/upload.";
+    setStatus("Preview ready.", "ok",
+      "Review the badge data, then save to back it up and apply the latest dashboard profile.");
+  } catch (failure) {
+    // DIAG: safe structure of what was actually captured.
+    let extra = "";
+    try {
+      const rows = structureMap(lastReply);
+      const nBrace = rows.filter((r) => r.tag === "JSON").length;
+      const nOther = rows.filter((r) => r.tag === "OTHER").length;
+      els.out.textContent = rows.map((r) =>
+        "line " + r.i + ": len=" + r.len + " [" + r.tag + "]").join("\n");
+      const t = parseTrailer(lastReply);
+      extra = " captured=" + lastReply.length + " bytes, " + rows.length +
+        " lines, brace-lines=" + nBrace + ", non-diagnostic-lines=" + nOther +
+        (t ? ", trailer bytes=" + t.bytes + " crc32=" + t.crc + " complete=" + t.complete
+           : ", NO trailer") +
+        (nOther > 0 ? ". Interleaved output split the JSON line." : "") +
+        " [" + decomposeFailure(lastReply).join("; ") + "]";
+    } catch (_) {}
+    els.summary.textContent = "SITE LOGIC: FAIL — " +
+      (failure instanceof Error ? failure.message : "Sync failed. Reconnect and try again.");
+    setStatus(failure instanceof Error ? failure.message : "Sync failed. Reconnect and try again.",
+      "bad", extra + " Unplug your badge and plug it back in. Reconnect on this page," +
+      " then sync before pressing any buttons on the badge.");
+  } finally {
+    setBusy(false);
+  }
+}
+
+els.connect.addEventListener("click", connect);
+els.run.addEventListener("click", runSiteLogic);
+els.disconnect.addEventListener("click", async () => {
+  await cleanup();
+  setStatus("Not connected", "", "Connect a powered badge to begin.");
+});
+updateControls();
+</script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+# Sync station flash layout (4 MB): the LCD/LVGL display stack needs a bigger
+# app slot than single_app_large's 1500K. No OTA, no filesystem on this box.
+nvs,      data, nvs,     ,        0x6000,
+phy_init, data, phy,     ,        0x1000,
+factory,  app,  factory, ,        2048K,

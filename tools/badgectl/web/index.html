@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hacker Badge Custom Apps</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+</head>
+<body>
+  <header>
+    <strong>Hacker Badge Custom Apps</strong>
+    <a class="home-link" href="/">Home</a>
+    <button id="import-app" disabled>Import app</button>
+    <button id="download-app" disabled>Download app</button>
+    <a class="guide-link" href="README.md" download="badge-app-guide.md">Download guide</a>
+    <button id="connect">Connect</button>
+    <button id="push" disabled>Push</button>
+    <button id="reboot" disabled>Reboot</button>
+    <button id="break" disabled title="Send Ctrl-C">^C</button>
+    <span id="slug-readout"></span>
+    <span id="status">disconnected</span>
+  </header>
+
+  <aside>
+    <div class="pane-head">
+      <span>files</span>
+      <button id="add-file" title="new file">+</button>
+    </div>
+    <ul id="files"></ul>
+    <div class="pane-head">
+      <span>launcher icon</span>
+    </div>
+    <div id="icon-panel">
+      <canvas id="icon-preview" width="42" height="42" title="42×42 launcher icon preview"></canvas>
+      <div id="icon-meta">no icon.bin</div>
+      <div class="icon-row">
+        <label class="icon-upload">Choose image<input id="icon-file" type="file" accept="image/*" hidden /></label>
+        <button id="icon-remove" title="delete icon.bin">×</button>
+      </div>
+      <div class="icon-hint">Resized here to 42×42. Only the 5.2 KB thumbnail is sent to the badge.</div>
+    </div>
+  </aside>
+
+  <div id="vsplit" class="splitter vsplit"></div>
+
+  <main id="editor"></main>
+
+  <div id="hsplit" class="splitter hsplit"></div>
+
+  <footer>
+    <div class="pane-head">
+      <span>console</span>
+      <span class="spacer"></span>
+      <button id="clear-log">clear</button>
+    </div>
+    <pre id="log"></pre>
+    <input id="console-input" type="text" autocomplete="off" spellcheck="false"
+           placeholder="type a command and press Enter (↑/↓ for history)" disabled />
+  </footer>
+
+  <div id="hint">
+    Use at your own risk.
+  </div>
+
+  <dialog id="connect-guide" aria-labelledby="connect-guide-title">
+    <div class="connect-guide-content">
+      <span class="connect-guide-kicker">Before you connect</span>
+      <h2 id="connect-guide-title">Connect your badge</h2>
+      <ol>
+        <li>Turn your badge <strong>off</strong>.</li>
+        <li>Plug it in with a <strong>data-capable USB-C cable</strong>.</li>
+        <li>Turn the badge back on.</li>
+        <li>
+          In the device menu, choose <strong>USB JTAG/serial debug unit</strong>.
+          It may be shown as <strong>Espressif</strong>.
+        </li>
+      </ol>
+      <p class="connect-guide-note">Don&rsquo;t hold Start while plugging the badge in.</p>
+      <div class="connect-guide-actions">
+        <button id="cancel-connect-guide" type="button">Cancel</button>
+        <button id="choose-device" class="primary" type="button">Choose device</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="import-app-dialog" aria-labelledby="import-app-title">
+    <div class="connect-guide-content">
+      <h2 id="import-app-title">Import a single-file app</h2>
+      <p>Paste the complete Lua file from your agent, including its badge-app
+        manifest header, or choose a saved .lua file.</p>
+      <p>This replaces the files in this editor. Use <strong>Download app</strong>
+        to save your current single-file app first. Nothing is sent to the badge
+        until you click <strong>Push</strong>.</p>
+      <label for="app-file">Choose an app file</label>
+      <input id="app-file" type="file" accept=".lua,.txt,text/plain" />
+      <label for="app-source">App config and full Lua code</label>
+      <textarea id="app-source" spellcheck="false" placeholder="--[==[badge-app&#10;slug=my_app&#10;name=My App&#10;icon=APP&#10;api=2&#10;]==]&#10;&#10;function on_enter(root)&#10;  badge.ui.label(root, &quot;Hello!&quot;)&#10;end"></textarea>
+      <p id="import-preview" role="status" aria-live="polite"></p>
+      <div class="connect-guide-actions">
+        <button id="cancel-app-import" type="button">Cancel</button>
+        <button id="apply-app-import" class="primary" type="button" disabled>Replace editor files</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script type="text/markdown" id="default-readme">
+# Agent instructions: create a Hacker Badge app in the IDE
+
+You are helping a user build a complete Lua app. Use **Download guide** for the
+full agent instructions, supported APIs, and six complete examples. The latest
+guide loads here when the IDE opens; if offline, reconnect and reload the page.
+
+If the user has not said what to make, ask what they would like and tell them
+you can build it. Wait for their answer. If they already gave an idea, use it.
+
+Return one complete Lua code block with its badge-app manifest header and all
+app code. Explain what it does and its controls, then tell the user:
+
+1. If **Import app** is present, save current work and paste the whole code
+   block there, then click **Replace editor files**.
+2. If it is absent, put only the header's key=value lines in **manifest.cfg**
+   and all code after ]==] in **main.lua**, without delimiters or code fences.
+3. Turn the badge off, connect a USB data cable, then turn it on normally.
+   Do not hold Start. Close other tools that use its serial port.
+4. Click **Connect**, choose **USB JTAG/serial debug unit**, then **Push**.
+5. Open the app on the badge. HOME normally returns to the launcher.
+
+Import changes the editor only. Push uploads manifest.cfg and main.lua;
+README.md is never uploaded. Do not claim the app was installed or tested
+unless you verified it.
+  </script>
+
+  <script src="app-bundle.js?v=1"></script>
+  <script src="app.js?v=single-file-app-20260916"></script>
+</body>
+</html>

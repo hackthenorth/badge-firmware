@@ -1,0 +1,53 @@
+# Two badges: bump, pair, play a move each way.
+#
+#   tools/badge/duet.py --out-dir /tmp run tools/badge/examples/chess-pair.txt
+#
+# Open Chess on BOTH badges first. `chess bump` forces the pairing window open
+# without anyone shaking anything; two console writes land about 50 ms apart
+# over USB, comfortably inside the badge's 500 ms window, so this exercises the
+# real mutual-bump path rather than bypassing it.
+
+both:console "chess new"
+a:console "chess bump"
+b:console "chess bump"
+settle 2500
+
+a:console "chess"
+a:expect "mp_state=Live"
+b:console "chess"
+b:expect "mp_state=Live"
+
+# The two cross-badge invariants. Both are real comparisons, not substring
+# matches that could pass by coincidence: the session id is derived from both
+# nonces so it must MATCH, and the seat comes from an antisymmetric function
+# so it must DIFFER.
+agree session
+differ seat
+
+# White moves. Whichever badge holds seat 0 is White, so drive both and let
+# the turn check reject the one that is not.
+a:console "chess move e2e4"
+settle 1500
+b:console "chess"
+b:expect "e4"
+
+# ...and back, which proves the ack chain settled and the turn passed over.
+b:console "chess move e7e5"
+settle 1500
+a:console "chess"
+a:expect "e5"
+
+# The whole point of full-position exchange: both badges must hold literally
+# the same board, not merely compatible ones. `hash` is the Zobrist key —
+# placement, side to move, castling and ep in one space-free token, so this is
+# a total comparison rather than a prefix of the FEN.
+agree hash
+
+# Duty tiers. The badge whose turn it is scans at 3.3% (Thinking); the one
+# waiting for a move scans at 10% (Waiting). Asserting this needs no power
+# meter because the dump reports the tier it actually applied.
+a:console "chess"
+b:console "chess"
+differ duty
+
+both:shot chess.png

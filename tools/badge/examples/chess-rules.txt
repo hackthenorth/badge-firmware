@@ -1,0 +1,47 @@
+# Chess rules, asserted on the badge rather than on a host.
+#
+#   tools/badge/badge.py run tools/badge/examples/chess-rules.txt
+#
+# tools/chess-perft already proves the engine on a host in 150 ms, so this is
+# not here to find rules bugs. It is here to prove the SAME engine gives the
+# same answers after being cross-compiled for RISC-V — a different compiler, a
+# different word size for `int`, and -Og instead of -O2.
+#
+# Launch Chess first (seedall, then open it), or every command reports
+# "not the active app".
+
+console "chess perft 3"
+expect "8902"
+
+# Back-rank mate: the black king is boxed in by its own pawns.
+console "chess fen 6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1"
+console "chess move a1a8"
+console "chess"
+expect "result=WhiteMates"
+
+# Stalemate: Kh8 has no legal move and is not in check. A rules engine that
+# gets this wrong usually reports a win.
+console "chess fen 7k/5Q2/6K1/8/8/8/8/8 b - - 0 1"
+console "chess"
+expect "result=Stalemate"
+
+# En passant exposing the king along the fifth rank. Both pawns leave it at
+# once, which is the case a pinned-piece shortcut misses.
+console "chess fen 8/8/8/K1pP3r/8/8/8/7k w - c6 0 1"
+console "chess move d5c6"
+expect "illegal"
+
+# Orientation. cur_cell is the SCREEN position of the cursor; with the board
+# unflipped, e1 (board square 4) must sit on the bottom row.
+console "chess new"
+console "chess"
+expect "cur=e1"
+expect "cur_cell=4,7"
+console "chess flip"
+console "chess"
+expect "cur_cell=3,0"
+
+# The LVGL heap gate. The board is 128 objects against a 64 KB pool; this is
+# the number to watch before anything else gets built on top of it.
+console "chess"
+expect "lv_mem_free="

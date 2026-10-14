@@ -1,0 +1,6 @@
+# The factory flasher serves these committed factory-test (FACTORY_TEST_BUILD=1)
+# binaries, so re-include them despite the repo-root `*.bin` ignore (.gitignore
+# line 39). Only these three names are tracked; anything else stays ignored.
+!bootloader.bin
+!partition-table.bin
+!firmware.bin

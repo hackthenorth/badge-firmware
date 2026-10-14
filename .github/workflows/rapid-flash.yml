@@ -1,0 +1,56 @@
+name: rapid-flash binaries
+
+# Cross-platform release binaries for tools/rapid-flash + a test gate on PRs.
+#
+# - Tag `rapid-flash-v*` (or manual dispatch): build --release on macOS,
+#   Windows, and Linux, upload one artifact per OS. The firmware image set
+#   is baked into the binary, so each artifact flashes standalone.
+# - PRs touching tools/rapid-flash/: cargo test + release check build.
+
+on:
+  push:
+    tags:
+      - 'rapid-flash-v*'
+    paths:
+      - 'tools/rapid-flash/**'
+  pull_request:
+    paths:
+      - 'tools/rapid-flash/**'
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Unit tests
+        run: cargo test --manifest-path tools/rapid-flash/Cargo.toml
+      - name: Release check
+        run: cargo build --release --manifest-path tools/rapid-flash/Cargo.toml
+
+  release:
+    name: build (${{ matrix.os }})
+    if: startsWith(github.ref, 'refs/tags/rapid-flash-') || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release --manifest-path tools/rapid-flash/Cargo.toml
+      - name: Upload binary (unix)
+        if: runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapid-flash-${{ runner.os }}-${{ runner.arch }}
+          path: tools/rapid-flash/target/release/rapid-flash
+      - name: Upload binary (windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapid-flash-Windows-${{ runner.arch }}
+          path: tools/rapid-flash/target/release/rapid-flash.exe

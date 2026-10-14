@@ -1,0 +1,18 @@
+[build]
+  base = "website"
+  command = "npm run build"
+  publish = "dist"
+  # The site copies the IDE from outside its base directory during build.
+  ignore = 'git diff --quiet "$CACHED_COMMIT_REF" "$COMMIT_REF" -- . ../tools/badgectl/web ../netlify.toml'
+
+[build.environment]
+  NODE_VERSION = "24"
+  VITE_POST_EVENT_UNLOCK = "true"
+  VITE_POST_EVENT_IDENTITY = "true"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "SAMEORIGIN"
